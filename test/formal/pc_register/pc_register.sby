@@ -1,0 +1,14 @@
+[options]
+mode prove
+depth 20
+
+[engines]
+smtbmc z3
+
+[script]
+read -formal pc_register.v pc_register_formal.v
+prep -top pc_register_formal
+
+[files]
+../../../src/pc_register.v
+pc_register_formal.v

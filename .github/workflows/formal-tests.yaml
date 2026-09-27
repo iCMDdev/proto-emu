@@ -1,0 +1,78 @@
+name: Formal Verification
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  discover:
+    name: Discover formal tests
+    runs-on: ubuntu-24.04
+
+    outputs:
+      tests: ${{ steps.discover.outputs.tests }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Discover formal test directories
+        id: discover
+        shell: bash
+        run: |
+          tests=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("test/formal")
+
+          tests = sorted(
+              p.name
+              for p in root.iterdir()
+              if p.is_dir() and (p / "Makefile").is_file()
+          )
+
+          print(json.dumps(tests))
+          PY
+          )
+
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          echo "Discovered formal tests: $tests"
+
+  formal:
+    name: Formal - ${{ matrix.test }}
+    needs: discover
+
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJson(needs.discover.outputs.tests) }}
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Setup OSS CAD Suite
+        uses: YosysHQ/setup-oss-cad-suite@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run formal verification
+        shell: bash
+        run: |
+          make -C test/formal/${{ matrix.test }}
+
+      - name: Upload formal results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: formal-${{ matrix.test }}
+          if-no-files-found: ignore
+          path: |
+            test/formal/${{ matrix.test }}/build/

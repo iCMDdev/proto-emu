@@ -23,3 +23,4 @@ __pycache__/
 results.xml
 sim_build/
 obj_dir/
+build/
