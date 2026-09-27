@@ -11,3 +11,15 @@ test/sim_build
 test/__pycache__/
 test/results.xml
 test/gate_level_netlist.v
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.vcd
+*.fst
+*.fst.hier
+results.xml
+sim_build/
+obj_dir/

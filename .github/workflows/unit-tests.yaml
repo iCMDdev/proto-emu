@@ -1,0 +1,94 @@
+name: Unit Tests
+on: [push, workflow_dispatch]
+jobs:
+  discover:
+    name: Discover unit tests
+    runs-on: ubuntu-24.04
+
+    outputs:
+      tests: ${{ steps.discover.outputs.tests }}
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Discover test directories
+        id: discover
+        shell: bash
+        run: |
+          tests=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("test/unit_tests")
+
+          tests = sorted(
+              p.name
+              for p in root.iterdir()
+              if p.is_dir() and (p / "Makefile").is_file()
+          )
+
+          print(json.dumps(tests))
+          PY
+          )
+
+          echo "tests=$tests" >> "$GITHUB_OUTPUT"
+          echo "Discovered unit tests: $tests"
+
+
+  test:
+    name: Unit Test - ${{ matrix.test }}
+    needs: discover
+
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJson(needs.discover.outputs.tests) }}
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Icarus Verilog
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y iverilog
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install Python packages
+        shell: bash
+        run: |
+          pip install -r test/requirements.txt
+
+      - name: Run ${{ matrix.test }}
+        shell: bash
+        run: |
+          make -C test/unit_tests/${{ matrix.test }} clean
+          make -C test/unit_tests/${{ matrix.test }}
+
+      - name: Test Summary
+        if: always()
+        uses: test-summary/action@v2.4
+        with:
+          paths: test/unit_tests/${{ matrix.test }}/results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-${{ matrix.test }}
+          if-no-files-found: ignore
+          path: |
+            test/unit_tests/${{ matrix.test }}/results.xml
+            test/unit_tests/${{ matrix.test }}/*.fst
