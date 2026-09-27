@@ -7,7 +7,7 @@ FST ?= -fst
 TOPLEVEL = $(DUT)
 COCOTB_TEST_MODULES = test
 
-SIM_BUILD = sim_build
+SIM_BUILD ?= sim_build
 
 COMPILE_ARGS += -I$(CURDIR)/../../../src
 
