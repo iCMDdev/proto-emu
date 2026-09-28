@@ -31,6 +31,74 @@
   "//": "https://tinytapeout.com/faq/#how-can-i-map-an-additional-external-clock-to-one-of-the-gpios",
   "CLOCK_PORT": "clk",
 
+  "//": "SRAM macro integration (TODO: VALIDATE / RECHECK!!! / configure location)",
+  "//": "Based on https://github.com/urish/ttihp-sram-test/",
+  "//": "Copyright (c) 2024 Uri Shkaed. SPDX-License-Identifier: Apache-2.0",
+  "MACROS": {
+    "RM_IHPSG13_2P_512x16_c2_bm_bist": {
+      "instances": {
+        "sram": {
+          "location": [80, 240],
+          "orientation": "R0"
+        }
+      },
+
+      "gds": [
+        "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist.gds"
+      ],
+
+      "lef": [
+        "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist.lef"
+      ],
+
+      "lib": {
+        "nom_*": [
+          "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_typ_1p20V_25C.lib"
+        ],
+
+        "min_*": [
+          "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_fast_1p32V_m55C.lib"
+        ],
+
+        "max_*": [
+          "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_slow_1p08V_125C.lib"
+        ],
+
+        "*": [
+          "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_typ_1p20V_25C.lib"
+        ]
+      },
+
+      "nl": [
+        "dir::./RM_IHPSG13_2P_512x16_c2_bm_bist.v"
+      ],
+
+      "spice": [
+        "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist.cdl"
+      ]
+    }
+  },
+
+  "PDN_MACRO_CONNECTIONS": [
+    "sram VPWR VGND VDD! VSS!",
+    "sram VPWR VGND VDDARRAY! VSS!"
+  ],
+
+  "//": "Custom PDN config connects the SRAM Metal4 power pins to the project PDN",
+  "PDN_CFG": "dir::pdn_cfg.tcl",
+
+  "//": "SRAM GDS has no PR boundary layer; read full GDS instead of blackbox",
+  "MAGIC_MACRO_STD_CELL_SOURCE": "PDK",
+
+  "//": "Ignore internal SRAM Magic DRC issues; macro itself is foundry-provided",
+  "ERROR_ON_MAGIC_DRC": false,
+
+  "//": "Blackbox SRAM macros during SPICE extraction for LVS",
+  "MAGIC_EXT_ABSTRACT_CELLS": [
+    "RM_IHPSG13_.*"
+  ],
+
+  
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
