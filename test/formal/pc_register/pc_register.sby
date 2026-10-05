@@ -1,3 +1,7 @@
+[tasks]
+negedge
+posedge
+
 [options]
 mode prove
 depth 20
@@ -7,6 +11,10 @@ smtbmc z3
 
 [script]
 read -formal pc_register.v pc_register_formal.v
+
+negedge: chparam -set USE_NEGEDGE 1 pc_register_formal
+posedge: chparam -set USE_NEGEDGE 0 pc_register_formal
+
 prep -top pc_register_formal
 
 [files]

@@ -1,0 +1,22 @@
+[tasks]
+negedge
+posedge
+
+[options]
+mode prove
+depth 20
+
+[engines]
+smtbmc z3
+
+[script]
+read -formal shift_register.v shift_register_formal.v
+
+negedge: chparam -set USE_NEGEDGE 1 shift_register_formal
+posedge: chparam -set USE_NEGEDGE 0 shift_register_formal
+
+prep -top shift_register_formal
+
+[files]
+../../../src/shift_register.v
+shift_register_formal.v

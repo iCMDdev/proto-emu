@@ -62,7 +62,7 @@ module shift_register #(
                 end
             end
         end else begin : gen_posedge
-            always @(negedge clk) begin
+            always @(posedge clk) begin
                 if (rst) begin
                     value <= {WIDTH{1'b0}};
                 end else if (load) begin

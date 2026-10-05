@@ -1,0 +1,22 @@
+[tasks]
+negedge
+posedge
+
+[options]
+mode prove
+depth 20
+
+[engines]
+smtbmc z3
+
+[script]
+read -formal register.v register_formal.v
+
+negedge: chparam -set USE_NEGEDGE 1 register_formal
+posedge: chparam -set USE_NEGEDGE 0 register_formal
+
+prep -top register_formal
+
+[files]
+../../../src/register.v
+register_formal.v

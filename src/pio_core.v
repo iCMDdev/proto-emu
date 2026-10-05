@@ -89,6 +89,10 @@ module pio_core #(
     assign set_dst = instr[9:8];
     assign set_imm = instr[7:0];
 
+    // MARK: DATAPATH
+    wire [15:0] x_minus_1 = x - 16'd1;
+    wire [15:0] y_minus_1 = y - 16'd1;
+
     // MARK: Instruction decode & control logic
     always @(*) begin
         // PC defaults: execute normally and increment
@@ -123,6 +127,15 @@ module pio_core #(
                     end
                 end
 
+                4'd3: begin // X-- != 0
+                    if (x != 16'b0) begin
+                        x_we         = 1'b1;
+                        x_data_in    = x_minus_1;
+                        pc_load      = 1'b1;
+                        pc_load_addr = jmp_addr;
+                    end
+                end
+
                 4'd4: begin // Y == 0
                     if (y == 16'b0) begin
                         pc_load      = 1'b1;
@@ -132,6 +145,15 @@ module pio_core #(
 
                 4'd5: begin // Y != 0
                     if (y != 16'b0) begin
+                        pc_load      = 1'b1;
+                        pc_load_addr = jmp_addr;
+                    end
+                end
+
+                4'd6: begin // Y-- != 0
+                    if (y != 16'b0) begin
+                        y_we         = 1'b1;
+                        y_data_in    = y_minus_1;
                         pc_load      = 1'b1;
                         pc_load_addr = jmp_addr;
                     end

@@ -8,7 +8,10 @@ TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
 PROJECT_SOURCES = \
 	project.v \
-	RM_IHPSG13_2P_512x16_c2_bm_bist.v\
+	RM_IHPSG13_2P_512x16_c2_bm_bist.v \
+	pio_core.v \
+	register.v \
+	pc_register.v
 
 ifneq ($(GATES),yes)
 

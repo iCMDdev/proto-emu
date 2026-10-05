@@ -69,6 +69,44 @@ module tt_um_example (
     .B_BIST_ADDR(9'b0),
     .B_BIST_DIN(16'b0),
     .B_BIST_BM(16'b0)
-);
+  );
+
+  wire rst = !rst_n;
+
+  pio_core #(
+      .USE_NEGEDGE(1)
+  ) main_pio (
+      .clk(clk),
+      .rst(rst),
+      .instr(instr),
+      .pc(pc)
+  );
+
+  wire [8:0]  host_pc;
+  reg  [15:0] host_instr;
+
+  // MARK: ROM
+  always @(*) begin
+      case (host_pc)
+          // SET X, 0
+          9'h000: host_instr = 16'h9000;
+
+          // JMP 1
+          // Stay here forever for now.
+          9'h001: host_instr = 16'h0001;
+
+          // Safety/default: JMP 0
+          default: host_instr = 16'h0000;
+      endcase
+  end
+
+  pio_core #(
+      .USE_NEGEDGE(1)
+  ) host_pio (
+      .clk(clk),
+      .rst(rst),
+      .instr(host_instr),
+      .pc(host_pc)
+  );
 
 endmodule
