@@ -85,6 +85,7 @@ module pio_core #(
     // MARK: SET fields
     wire [1:0] set_dst;
     wire [7:0] set_imm;
+    wire [15:0] set_reg_res;
 
     assign set_dst = instr[9:8];
     assign set_imm = instr[7:0];
@@ -92,6 +93,7 @@ module pio_core #(
     // MARK: DATAPATH
     wire [15:0] x_minus_1 = x - 16'd1;
     wire [15:0] y_minus_1 = y - 16'd1;
+    assign set_reg_res = {8'b0, set_imm};
 
     // MARK: Instruction decode & control logic
     always @(*) begin
@@ -169,12 +171,12 @@ module pio_core #(
                     case (set_dst)
                         2'b00: begin // X
                             x_we      = 1'b1;
-                            x_data_in = {8'b0, set_imm};
+                            x_data_in = set_reg_res;
                         end
 
                         2'b01: begin // Y
                             y_we      = 1'b1;
-                            y_data_in = {8'b0, set_imm};
+                            y_data_in = set_reg_res;
                         end
 
                         default: begin
