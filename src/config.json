@@ -85,9 +85,6 @@
     "sram VPWR VGND VDDARRAY! VSS!"
   ],
 
-  "//": "Custom PDN config connects the SRAM Metal4 power pins to the project PDN",
-  "PDN_CFG": "dir::pdn_cfg.tcl",
-
   "//": "SRAM GDS has no PR boundary layer; read full GDS instead of blackbox",
   "MAGIC_MACRO_STD_CELL_SOURCE": "PDK",
 
