@@ -82,6 +82,8 @@
 
   "PDN_CONNECT_MACROS_TO_GRID": false,
 
+  "PDN_CFG": "dir::pdn_cfg.tcl",
+  
   "PDN_MACRO_CONNECTIONS": [
     "sram VPWR VGND VDD! VSS!",
     "sram VPWR VGND VDDARRAY! VSS!"
