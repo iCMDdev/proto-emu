@@ -111,4 +111,7 @@ module tt_um_example (
       .pc(host_pc)
   );
 
+//   (* keep *)
+//   proto_logo logo();
+
 endmodule

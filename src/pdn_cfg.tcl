@@ -1,51 +1,59 @@
 #
-# Temporary CMOS5L SRAM PDN configuration.
+# PDN for tt_um_example
 #
-# Keep the standard Tiny Tapeout single-layer Metal4 PDN, then add
-# one VPWR and one VGND Metal4 stripe aligned with known power pin
-# columns of RM_IHPSG13_2P_512x16_c2_bm_bist.
+# SRAM:
+#   location    = [20, 20]
+#   orientation = R180
 #
-# This is intended as an initial hardening / connectivity test.
+# Normal core PDN remains on Metal4.
+# Three horizontal TopMetal1 buses connect the SRAM:
+#
+#   VDD!       -> VPWR
+#   VSS!       -> VGND
+#   VDDARRAY!  -> VPWR
 #
 
 source $::env(SCRIPTS_DIR)/openroad/common/set_global_connections.tcl
 set_global_connections
 
-#
-# Explicitly connect the SRAM supply pins to the project supplies.
-#
-# PDN_CONNECT_MACROS_TO_GRID is disabled, so do not rely on the
-# generic LibreLane macro-grid mechanism to do this for us.
-#
-add_global_connection \
-    -net $::env(VDD_NET) \
-    -inst_pattern {^sram$} \
-    -pin_pattern {^VDD!$}
+
+# ----------------------------------------------------------------------
+# Explicit SRAM power connections
+# ----------------------------------------------------------------------
 
 add_global_connection \
     -net $::env(VDD_NET) \
     -inst_pattern {^sram$} \
-    -pin_pattern {^VDDARRAY!$}
+    -pin_pattern {^VDD!$} \
+    -power
+
+add_global_connection \
+    -net $::env(VDD_NET) \
+    -inst_pattern {^sram$} \
+    -pin_pattern {^VDDARRAY!$} \
+    -power
 
 add_global_connection \
     -net $::env(GND_NET) \
     -inst_pattern {^sram$} \
-    -pin_pattern {^VSS!$}
+    -pin_pattern {^VSS!$} \
+    -ground
 
 global_connect
 
 
-#
-# Set up the core voltage domain.
-#
-set secondary []
+# ----------------------------------------------------------------------
+# Voltage domain
+# ----------------------------------------------------------------------
+
+set secondary {}
 
 foreach vdd $::env(VDD_NETS) gnd $::env(GND_NETS) {
-    if { $vdd != $::env(VDD_NET) } {
+    if {$vdd != $::env(VDD_NET)} {
         lappend secondary $vdd
     }
 
-    if { $gnd != $::env(GND_NET) } {
+    if {$gnd != $::env(GND_NET)} {
         lappend secondary $gnd
     }
 }
@@ -57,21 +65,19 @@ set_voltage_domain \
     -secondary_power $secondary
 
 
-#
-# Standard Tiny Tapeout single-layer PDN.
-#
-# For CMOS5L this is the normal vertical Metal4 grid.
-#
+# ----------------------------------------------------------------------
+# Normal core PDN
+# ----------------------------------------------------------------------
+
 define_pdn_grid \
     -name stdcell_grid \
     -starts_with POWER \
-    -voltage_domain CORE \
+    -voltage_domains {CORE} \
     -pins $::env(PDN_VERTICAL_LAYER)
 
 
-#
-# Normal repeating Tiny Tapeout VPWR/VGND stripes.
-#
+# Normal repeating vertical Metal4 grid.
+# Uses FP_PDN_VPITCH / VWIDTH / VSPACING / VOFFSET from config.json.
 add_pdn_stripe \
     -grid stdcell_grid \
     -layer $::env(PDN_VERTICAL_LAYER) \
@@ -82,85 +88,190 @@ add_pdn_stripe \
     -starts_with POWER
 
 
-#
-# Find where the SRAM actually ended up.
-#
+# ----------------------------------------------------------------------
+# Locate SRAM
+# ----------------------------------------------------------------------
+
 set block [ord::get_db_block]
 set sram [$block findInst sram]
 
-if { $sram == "NULL" } {
-    utl::error PDN 900 "SRAM instance 'sram' was not found."
+if {$sram == "NULL"} {
+    utl::error PDN 900 "SRAM instance 'sram' not found."
 }
 
 set sram_bbox [$sram getBBox]
 set core_bbox [$block getCoreArea]
 
-set sram_x [ord::dbu_to_microns [$sram_bbox xMin]]
-set core_x [ord::dbu_to_microns [$core_bbox xMin]]
+set sram_xmin [ord::dbu_to_microns [$sram_bbox xMin]]
+set sram_ymin [ord::dbu_to_microns [$sram_bbox yMin]]
+set sram_ymax [ord::dbu_to_microns [$sram_bbox yMax]]
+
+set core_ymin [ord::dbu_to_microns [$core_bbox yMin]]
+
+set sram_height [expr {$sram_ymax - $sram_ymin}]
+
+puts "SRAM xmin   = $sram_xmin"
+puts "SRAM ymin   = $sram_ymin"
+puts "SRAM ymax   = $sram_ymax"
+puts "SRAM height = $sram_height"
 
 
+# ----------------------------------------------------------------------
+# SRAM TopMetal1 buses
+# ----------------------------------------------------------------------
 #
-# Power-pin centers from the SRAM LEF, for orientation R0:
+# R0 pin regions:
 #
-# VDD!/VDDARRAY!:
-#   RECT 6.145 ... 10.565
-#   center = 8.355 um
+#   VDD!       : y =   0.000 .. 47.045
+#   VDDARRAY!  : y =  53.410 .. 219.770
+#   VSS!       : spans SRAM height
 #
-# VSS!:
-#   RECT 14.985 ... 19.405
-#   center = 17.195 um
+# Original convenient R0 crossing positions:
 #
-set sram_vpwr_x [expr {$sram_x + 8.355}]
-set sram_vgnd_x [expr {$sram_x + 17.195}]
+#   VDD!       = 20
+#   VSS!       = 50
+#   VDDARRAY!  = 100
+#
+# SRAM is R180, therefore:
+#
+#   y_rotated = SRAM_HEIGHT - y_original
+#
+# giving approximately:
+#
+#   VDD!       = 199.770
+#   VSS!       = 169.770
+#   VDDARRAY!  = 119.770
+#
+# With SRAM ymin = 20:
+#
+#   VDD!       global y ~= 219.770
+#   VSS!       global y ~= 189.770
+#   VDDARRAY!  global y ~= 139.770
+#
 
-#
-# add_pdn_stripe offsets are relative to the core lower-left corner.
-#
-set sram_vpwr_offset [expr {$sram_vpwr_x - $core_x}]
-set sram_vgnd_offset [expr {$sram_vgnd_x - $core_x}]
+set vdd_r0_y      20.0
+set vss_r0_y      50.0
+set vddarray_r0_y 100.0
 
-puts "SRAM bbox x:             $sram_x"
-puts "Core left x:             $core_x"
-puts "SRAM VPWR stripe x:      $sram_vpwr_x"
-puts "SRAM VGND stripe x:      $sram_vgnd_x"
-puts "SRAM VPWR PDN offset:    $sram_vpwr_offset"
-puts "SRAM VGND PDN offset:    $sram_vgnd_offset"
+set vdd_local_y \
+    [expr {$sram_height - $vdd_r0_y}]
+
+set vss_local_y \
+    [expr {$sram_height - $vss_r0_y}]
+
+set vddarray_local_y \
+    [expr {$sram_height - $vddarray_r0_y}]
 
 
-#
-# Add one extra Metal4 VPWR stripe exactly over the SRAM's
-# VDD!/VDDARRAY! column.
-#
-# Huge pitch ensures only one occurs in this design.
-#
+set vdd_global_y \
+    [expr {$sram_ymin + $vdd_local_y}]
+
+set vss_global_y \
+    [expr {$sram_ymin + $vss_local_y}]
+
+set vddarray_global_y \
+    [expr {$sram_ymin + $vddarray_local_y}]
+
+
+# add_pdn_stripe offset is relative to core bottom.
+set vdd_offset \
+    [expr {$vdd_global_y - $core_ymin}]
+
+set vss_offset \
+    [expr {$vss_global_y - $core_ymin}]
+
+set vddarray_offset \
+    [expr {$vddarray_global_y - $core_ymin}]
+
+
+set sram_bus_layer TopMetal1
+set sram_bus_width 2.0
+
+if {[info exists ::env(PDN_HORIZONTAL_LAYER)]} {
+    set sram_bus_layer $::env(PDN_HORIZONTAL_LAYER)
+}
+
+if {[info exists ::env(PDN_HWIDTH)]} {
+    set sram_bus_width $::env(PDN_HWIDTH)
+}
+
+
+puts "SRAM TopMetal1 buses:"
+puts "  VDD!       y = $vdd_global_y"
+puts "  VSS!       y = $vss_global_y"
+puts "  VDDARRAY!  y = $vddarray_global_y"
+
+
+# VDD! bus
 add_pdn_stripe \
     -grid stdcell_grid \
-    -layer $::env(PDN_VERTICAL_LAYER) \
-    -width $::env(PDN_VWIDTH) \
+    -layer $sram_bus_layer \
+    -width $sram_bus_width \
     -pitch 10000 \
-    -offset $sram_vpwr_offset \
-    -nets "$::env(VDD_NET)" \
+    -offset $vdd_offset \
+    -nets [list $::env(VDD_NET)] \
     -extend_to_boundary
 
 
-#
-# Add one extra Metal4 VGND stripe exactly over the adjacent
-# full-height VSS! column.
-#
+# VSS! bus
 add_pdn_stripe \
     -grid stdcell_grid \
-    -layer $::env(PDN_VERTICAL_LAYER) \
-    -width $::env(PDN_VWIDTH) \
+    -layer $sram_bus_layer \
+    -width $sram_bus_width \
     -pitch 10000 \
-    -offset $sram_vgnd_offset \
-    -nets "$::env(GND_NET)" \
+    -offset $vss_offset \
+    -nets [list $::env(GND_NET)] \
     -extend_to_boundary
 
 
-#
-# Standard-cell Metal1 rails.
-#
-if { $::env(PDN_ENABLE_RAILS) == 1 } {
+# VDDARRAY! bus
+add_pdn_stripe \
+    -grid stdcell_grid \
+    -layer $sram_bus_layer \
+    -width $sram_bus_width \
+    -pitch 10000 \
+    -offset $vddarray_offset \
+    -nets [list $::env(VDD_NET)] \
+    -extend_to_boundary
+
+
+# Connect normal Metal4 PDN to TopMetal1 buses.
+add_pdn_connect \
+    -grid stdcell_grid \
+    -layers [list \
+        $::env(PDN_VERTICAL_LAYER) \
+        $sram_bus_layer \
+    ]
+
+
+# ----------------------------------------------------------------------
+# SRAM macro grid
+# ----------------------------------------------------------------------
+
+define_pdn_grid \
+    -macro \
+    -name sram_grid \
+    -instances {sram} \
+    -voltage_domains {CORE} \
+    -grid_over_pg_pins \
+    -starts_with POWER
+
+
+# Connect SRAM Metal4 PG pins to TopMetal1.
+add_pdn_connect \
+    -grid sram_grid \
+    -layers [list \
+        $::env(PDN_VERTICAL_LAYER) \
+        $sram_bus_layer \
+    ]
+
+
+# ----------------------------------------------------------------------
+# Standard-cell rails
+# ----------------------------------------------------------------------
+
+if {$::env(PDN_ENABLE_RAILS) == 1} {
+
     add_pdn_stripe \
         -grid stdcell_grid \
         -layer $::env(PDN_RAIL_LAYER) \
@@ -169,5 +280,8 @@ if { $::env(PDN_ENABLE_RAILS) == 1 } {
 
     add_pdn_connect \
         -grid stdcell_grid \
-        -layers "$::env(PDN_RAIL_LAYER) $::env(PDN_VERTICAL_LAYER)"
+        -layers [list \
+            $::env(PDN_RAIL_LAYER) \
+            $::env(PDN_VERTICAL_LAYER) \
+        ]
 }

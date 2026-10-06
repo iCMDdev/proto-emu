@@ -39,8 +39,8 @@
     "RM_IHPSG13_2P_512x16_c2_bm_bist": {
       "instances": {
         "sram": {
-          "location": [80, 240],
-          "orientation": "R0"
+          "location": [20, 20],
+          "orientation": "R180"
         }
       },
 
@@ -53,20 +53,14 @@
       ],
 
       "lib": {
-        "nom_*": [
+        "*_typ_*": [
           "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_typ_1p20V_25C.lib"
         ],
-
-        "min_*": [
+        "*_fast_*": [
           "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_fast_1p32V_m55C.lib"
         ],
-
-        "max_*": [
+        "*_slow_*": [
           "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_slow_1p08V_125C.lib"
-        ],
-
-        "*": [
-          "dir::../macro/RM_IHPSG13_2P_512x16_c2_bm_bist/RM_IHPSG13_2P_512x16_c2_bm_bist_typ_1p20V_25C.lib"
         ]
       },
 
@@ -80,10 +74,8 @@
     }
   },
 
-  "PDN_CONNECT_MACROS_TO_GRID": false,
-
   "PDN_CFG": "dir::pdn_cfg.tcl",
-  
+
   "PDN_MACRO_CONNECTIONS": [
     "sram VPWR VGND VDD! VSS!",
     "sram VPWR VGND VDDARRAY! VSS!"
@@ -100,7 +92,6 @@
     "RM_IHPSG13_.*"
   ],
 
-  
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
