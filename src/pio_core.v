@@ -22,11 +22,12 @@ module pio_core #(
     assign side_val = instr[13];
 
     // MARK: Program Counter
+    reg halt;
     reg pc_load;
     wire pc_inc;
     reg [8:0] pc_load_addr;    
 
-    assign pc_inc = !pc_load;
+    assign pc_inc = !pc_load & !halt;
 
     pc_register #(
         .USE_NEGEDGE(USE_NEGEDGE)
@@ -90,6 +91,29 @@ module pio_core #(
     assign set_dst = instr[9:8];
     assign set_imm = instr[7:0];
 
+    // MARK: NOP Delay
+    wire[9:0] instr_delay;
+    wire[9:0] delay_out;
+    wire delay_load;
+    // is this a delay instruction?
+    wire is_delay = instr[15] == 1'b1 && (op == 3'b110);
+    
+    assign instr_delay = instr[9:0];
+    // if this is a delay instruction, load the counter,
+    // but only if it isn't already loaded
+    assign delay_load = is_delay && (delay_out == 0);
+
+    delay_counter #(
+        .USE_NEGEDGE(USE_NEGEDGE)
+    ) delay_cnt (
+        .clk(clk),
+        .rst(rst),
+        .load(delay_load),
+        .dec(1'b1),
+        .data_in(instr_delay),
+        .data_out(delay_out)
+    );
+
     // MARK: DATAPATH
     wire [15:0] x_minus_1 = x - 16'd1;
     wire [15:0] y_minus_1 = y - 16'd1;
@@ -99,6 +123,7 @@ module pio_core #(
     always @(*) begin
         // PC defaults: execute normally and increment
         pc_load      = 1'b0;
+        halt         = 1'b0;
         pc_load_addr = 9'b0;
 
         // Register defaults: don't write
@@ -182,6 +207,14 @@ module pio_core #(
                         default: begin
                         end
                     endcase
+                end
+
+                3'b110: begin // NOP
+                    // Wait for 1 instruction, plus an additional
+                    // number of encoded instructions called "delay".
+                    if (delay_out != 0) begin
+                        halt = 1'b1;
+                    end
                 end
 
                 default: begin

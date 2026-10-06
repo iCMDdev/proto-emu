@@ -80,6 +80,8 @@
     }
   },
 
+  "PDN_CONNECT_MACROS_TO_GRID": false,
+
   "PDN_MACRO_CONNECTIONS": [
     "sram VPWR VGND VDD! VSS!",
     "sram VPWR VGND VDDARRAY! VSS!"

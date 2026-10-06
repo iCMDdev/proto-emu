@@ -1,0 +1,22 @@
+[tasks]
+negedge
+posedge
+
+[options]
+mode prove
+depth 20
+
+[engines]
+smtbmc z3
+
+[script]
+read -formal delay_counter.v delay_counter_formal.v
+
+negedge: chparam -set USE_NEGEDGE 1 delay_counter_formal
+posedge: chparam -set USE_NEGEDGE 0 delay_counter_formal
+
+prep -top delay_counter_formal
+
+[files]
+../../../src/delay_counter.v
+delay_counter_formal.v

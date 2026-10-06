@@ -11,7 +11,8 @@ PROJECT_SOURCES = \
 	RM_IHPSG13_2P_512x16_c2_bm_bist.v \
 	pio_core.v \
 	register.v \
-	pc_register.v
+	pc_register.v \
+	delay_counter.v
 
 ifneq ($(GATES),yes)
 
