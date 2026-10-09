@@ -1,5 +1,6 @@
 `default_nettype none
 
+(* blackbox *) (* keep *)
 module RM_IHPSG13_2P_512x16_c2_bm_bist (
     input  wire        A_CLK,
     input  wire        A_MEN,

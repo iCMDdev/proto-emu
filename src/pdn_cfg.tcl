@@ -1,287 +1,178 @@
-#
-# PDN for tt_um_example
-#
-# SRAM:
-#   location    = [20, 20]
-#   orientation = R180
-#
-# Normal core PDN remains on Metal4.
-# Three horizontal TopMetal1 buses connect the SRAM:
-#
-#   VDD!       -> VPWR
-#   VSS!       -> VGND
-#   VDDARRAY!  -> VPWR
-#
+# Power Delivery Network configuration.
+# Builds the normal Tiny Tapeout grid, but for the SRAM, it
+# replaces the stripes with special ones, aligned with the 
+# SRAM's Vdd/Vddarray/Vss power pins.
 
+# Load normal OpenROAD config and set the usual global power connections
 source $::env(SCRIPTS_DIR)/openroad/common/set_global_connections.tcl
 set_global_connections
 
-
-# ----------------------------------------------------------------------
-# Explicit SRAM power connections
-# ----------------------------------------------------------------------
-
-add_global_connection \
-    -net $::env(VDD_NET) \
-    -inst_pattern {^sram$} \
-    -pin_pattern {^VDD!$} \
-    -power
-
-add_global_connection \
-    -net $::env(VDD_NET) \
-    -inst_pattern {^sram$} \
-    -pin_pattern {^VDDARRAY!$} \
-    -power
-
-add_global_connection \
-    -net $::env(GND_NET) \
-    -inst_pattern {^sram$} \
-    -pin_pattern {^VSS!$} \
-    -ground
-
+# Tell OpenROAD what the SRAM pins are connected to (Vdd & Vddarray = power; Vss=ground)
+add_global_connection -net $::env(VDD_NET) -inst_pattern {^sram$} -pin_pattern {^VDD!$}      -power
+add_global_connection -net $::env(VDD_NET) -inst_pattern {^sram$} -pin_pattern {^VDDARRAY!$} -power
+add_global_connection -net $::env(GND_NET) -inst_pattern {^sram$} -pin_pattern {^VSS!$}      -ground
 global_connect
 
-
-# ----------------------------------------------------------------------
-# Voltage domain
-# ----------------------------------------------------------------------
-
+# find extra supply nets that aren't VPWR / VGND
 set secondary {}
-
 foreach vdd $::env(VDD_NETS) gnd $::env(GND_NETS) {
-    if {$vdd != $::env(VDD_NET)} {
-        lappend secondary $vdd
-    }
-
-    if {$gnd != $::env(GND_NET)} {
-        lappend secondary $gnd
-    }
+    if {$vdd != $::env(VDD_NET)} { lappend secondary $vdd }
+    if {$gnd != $::env(GND_NET)} { lappend secondary $gnd }
 }
 
-set_voltage_domain \
-    -name CORE \
-    -power $::env(VDD_NET) \
-    -ground $::env(GND_NET) \
+# Set the core's voltage domain
+set_voltage_domain -name CORE \
+    -power $::env(VDD_NET) -ground $::env(GND_NET) \
     -secondary_power $secondary
 
-
-# ----------------------------------------------------------------------
-# Normal core PDN
-# ----------------------------------------------------------------------
-
-define_pdn_grid \
-    -name stdcell_grid \
-    -starts_with POWER \
-    -voltage_domains {CORE} \
-    -pins $::env(PDN_VERTICAL_LAYER)
-
-
-# Normal repeating vertical Metal4 grid.
-# Uses FP_PDN_VPITCH / VWIDTH / VSPACING / VOFFSET from config.json.
-add_pdn_stripe \
-    -grid stdcell_grid \
-    -layer $::env(PDN_VERTICAL_LAYER) \
-    -width $::env(PDN_VWIDTH) \
-    -pitch $::env(PDN_VPITCH) \
-    -offset $::env(PDN_VOFFSET) \
-    -spacing $::env(PDN_VSPACING) \
-    -starts_with POWER
-
-
-# ----------------------------------------------------------------------
-# Locate SRAM
-# ----------------------------------------------------------------------
-
+# Find SRAM instance
 set block [ord::get_db_block]
 set sram [$block findInst sram]
+if {$sram == "NULL"} { utl::error PDN 900 "Instance sram not found." }
 
-if {$sram == "NULL"} {
-    utl::error PDN 900 "SRAM instance 'sram' not found."
-}
+# Get SRAM and core bounding boxes / areas
+set sb [$sram getBBox]
+set cb [$block getCoreArea]
+set sx0 [ord::dbu_to_microns [$sb xMin]]
+set sy0 [ord::dbu_to_microns [$sb yMin]]
+set sx1 [ord::dbu_to_microns [$sb xMax]]
+set sy1 [ord::dbu_to_microns [$sb yMax]]
+set cx0 [ord::dbu_to_microns [$cb xMin]]
+set cx1 [ord::dbu_to_microns [$cb xMax]]
 
-set sram_bbox [$sram getBBox]
-set core_bbox [$block getCoreArea]
+puts "SRAM bbox = {$sx0 $sy0 $sx1 $sy1}, orient=[$sram getOrient]"
 
-set sram_xmin [ord::dbu_to_microns [$sram_bbox xMin]]
-set sram_ymin [ord::dbu_to_microns [$sram_bbox yMin]]
-set sram_ymax [ord::dbu_to_microns [$sram_bbox yMax]]
+# Add SRAM power connections.
+# Symmetric distributed subset of exact SRAM PG centers after R180.
+# The right-side selections are exact mirrors of the left-side selections
+# about the SRAM center x = 221.305um.
+set wide_p  {28.355 63.715 99.075 134.435 308.175 343.535 378.895 414.255}
+set wide_g  {37.195 72.555 107.915 143.275 299.335 334.695 370.055 405.415}
+set narrow_p {187.830 213.580 229.030 254.780}
+set narrow_g {192.980 208.430 234.180 249.630}
 
-set core_ymin [ord::dbu_to_microns [$core_bbox yMin]]
+# Port width: WIDE & NARROW are SRAM-specific, while NORMAL is the
+# configured PDN_VWIDTH.
+set WIDE   4.42
+set NARROW 2.81
+set NORMAL $::env(PDN_VWIDTH)
 
-set sram_height [expr {$sram_ymax - $sram_ymin}]
+# Define the PDN grid
+define_pdn_grid -name stdcell_grid \
+    -starts_with POWER -voltage_domains {CORE} \
+    -pins $::env(PDN_VERTICAL_LAYER)
 
-puts "SRAM xmin   = $sram_xmin"
-puts "SRAM ymin   = $sram_ymin"
-puts "SRAM ymax   = $sram_ymax"
-puts "SRAM height = $sram_height"
-
-
-# ----------------------------------------------------------------------
-# SRAM TopMetal1 buses
-# ----------------------------------------------------------------------
-#
-# R0 pin regions:
-#
-#   VDD!       : y =   0.000 .. 47.045
-#   VDDARRAY!  : y =  53.410 .. 219.770
-#   VSS!       : spans SRAM height
-#
-# Original convenient R0 crossing positions:
-#
-#   VDD!       = 20
-#   VSS!       = 50
-#   VDDARRAY!  = 100
-#
-# SRAM is R180, therefore:
-#
-#   y_rotated = SRAM_HEIGHT - y_original
-#
-# giving approximately:
-#
-#   VDD!       = 199.770
-#   VSS!       = 169.770
-#   VDDARRAY!  = 119.770
-#
-# With SRAM ymin = 20:
-#
-#   VDD!       global y ~= 219.770
-#   VSS!       global y ~= 189.770
-#   VDDARRAY!  global y ~= 139.770
-#
-
-set vdd_r0_y      20.0
-set vss_r0_y      50.0
-set vddarray_r0_y 100.0
-
-set vdd_local_y \
-    [expr {$sram_height - $vdd_r0_y}]
-
-set vss_local_y \
-    [expr {$sram_height - $vss_r0_y}]
-
-set vddarray_local_y \
-    [expr {$sram_height - $vddarray_r0_y}]
-
-
-set vdd_global_y \
-    [expr {$sram_ymin + $vdd_local_y}]
-
-set vss_global_y \
-    [expr {$sram_ymin + $vss_local_y}]
-
-set vddarray_global_y \
-    [expr {$sram_ymin + $vddarray_local_y}]
-
-
-# add_pdn_stripe offset is relative to core bottom.
-set vdd_offset \
-    [expr {$vdd_global_y - $core_ymin}]
-
-set vss_offset \
-    [expr {$vss_global_y - $core_ymin}]
-
-set vddarray_offset \
-    [expr {$vddarray_global_y - $core_ymin}]
-
-
-set sram_bus_layer TopMetal1
-set sram_bus_width 2.0
-
-if {[info exists ::env(PDN_HORIZONTAL_LAYER)]} {
-    set sram_bus_layer $::env(PDN_HORIZONTAL_LAYER)
-}
-
-if {[info exists ::env(PDN_HWIDTH)]} {
-    set sram_bus_width $::env(PDN_HWIDTH)
-}
-
-
-puts "SRAM TopMetal1 buses:"
-puts "  VDD!       y = $vdd_global_y"
-puts "  VSS!       y = $vss_global_y"
-puts "  VDDARRAY!  y = $vddarray_global_y"
-
-
-# VDD! bus
-add_pdn_stripe \
-    -grid stdcell_grid \
-    -layer $sram_bus_layer \
-    -width $sram_bus_width \
-    -pitch 10000 \
-    -offset $vdd_offset \
-    -nets [list $::env(VDD_NET)] \
-    -extend_to_boundary
-
-
-# VSS! bus
-add_pdn_stripe \
-    -grid stdcell_grid \
-    -layer $sram_bus_layer \
-    -width $sram_bus_width \
-    -pitch 10000 \
-    -offset $vss_offset \
-    -nets [list $::env(GND_NET)] \
-    -extend_to_boundary
-
-
-# VDDARRAY! bus
-add_pdn_stripe \
-    -grid stdcell_grid \
-    -layer $sram_bus_layer \
-    -width $sram_bus_width \
-    -pitch 10000 \
-    -offset $vddarray_offset \
-    -nets [list $::env(VDD_NET)] \
-    -extend_to_boundary
-
-
-# Connect normal Metal4 PDN to TopMetal1 buses.
-add_pdn_connect \
-    -grid stdcell_grid \
-    -layers [list \
-        $::env(PDN_VERTICAL_LAYER) \
-        $sram_bus_layer \
-    ]
-
-
-# ----------------------------------------------------------------------
-# SRAM macro grid
-# ----------------------------------------------------------------------
-
-define_pdn_grid \
-    -macro \
-    -name sram_grid \
-    -instances {sram} \
-    -voltage_domains {CORE} \
-    -grid_over_pg_pins \
-    -starts_with POWER
-
-
-# Connect SRAM Metal4 PG pins to TopMetal1.
-add_pdn_connect \
-    -grid sram_grid \
-    -layers [list \
-        $::env(PDN_VERTICAL_LAYER) \
-        $sram_bus_layer \
-    ]
-
-
-# ----------------------------------------------------------------------
-# Standard-cell rails
-# ----------------------------------------------------------------------
-
+# Add standard cell rails if enabled
 if {$::env(PDN_ENABLE_RAILS) == 1} {
-
-    add_pdn_stripe \
-        -grid stdcell_grid \
+    add_pdn_stripe -grid stdcell_grid \
         -layer $::env(PDN_RAIL_LAYER) \
-        -width $::env(PDN_RAIL_WIDTH) \
-        -followpins
+        -width $::env(PDN_RAIL_WIDTH) -followpins
+}
 
-    add_pdn_connect \
-        -grid stdcell_grid \
-        -layers [list \
-            $::env(PDN_RAIL_LAYER) \
-            $::env(PDN_VERTICAL_LAYER) \
-        ]
+# Add one full-height M4 stripe at an absolute X coordinate.
+proc m4stripe {net width x core_xmin} {
+    add_pdn_stripe -grid stdcell_grid \
+        -layer $::env(PDN_VERTICAL_LAYER) \
+        -nets [list $net] \
+        -width $width \
+        -pitch $::env(PDN_VPITCH) \
+        -offset [expr {$x - $core_xmin}] \
+        -number_of_straps 1
+}
+
+# Preserve the normal 2.1um/50um grid outside the SRAM X-span.
+# The SRAM X-span is intentionally replaced by aligned feeder stripes.
+
+# Calculate the coordinate of the first normal (i.e. non-SRAM) stripes
+set px [expr {$cx0 + $::env(PDN_VOFFSET)}]
+set gx [expr {$px + $::env(PDN_VWIDTH) + $::env(PDN_VSPACING)}]
+for {set n 0} {1} {incr n} {
+    # Calculate current iteration's stripe pair coords
+    set p [expr {$px + $n*$::env(PDN_VPITCH)}]
+    set g [expr {$gx + $n*$::env(PDN_VPITCH)}]
+
+    # break if we're outside the core already
+    if {$p > $cx1 && $g > $cx1} break
+
+    # add each stripe if it is inside the SRAM & core
+    if {$p <= $cx1 && ($p < $sx0 || $p > $sx1)} {
+        m4stripe $::env(VDD_NET) $NORMAL $p $cx0
+    }
+    if {$g <= $cx1 && ($g < $sx0 || $g > $sx1)} {
+        m4stripe $::env(GND_NET) $NORMAL $g $cx0
+    }
+}
+
+# SRAM-aligned M4 feeders
+foreach x $wide_p   { m4stripe $::env(VDD_NET) $WIDE   $x $cx0 }
+foreach x $wide_g   { m4stripe $::env(GND_NET) $WIDE   $x $cx0 }
+foreach x $narrow_p { m4stripe $::env(VDD_NET) $NARROW $x $cx0 }
+foreach x $narrow_g { m4stripe $::env(GND_NET) $NARROW $x $cx0 }
+
+# Connect cells to PDN if needed (i.e. vias)
+if {$::env(PDN_ENABLE_RAILS) == 1} {
+    add_pdn_connect -grid stdcell_grid \
+        -layers [list $::env(PDN_RAIL_LAYER) $::env(PDN_VERTICAL_LAYER)]
+}
+
+
+# Problem: PDNGen does not connect th PDN stripes to the macro - it
+# clips those stripes, and a gap exists between the macro and those
+# stripes. We need to add some bridges that fill that tiny gap with
+# same-layer Metal4.
+
+# Get Metal4 layer
+set tech [ord::get_db_tech]
+set m4 [$tech findLayer $::env(PDN_VERTICAL_LAYER)]
+
+# Get the Vdd and GND nets
+set vpwr [$block findNet $::env(VDD_NET)]
+set vgnd [$block findNet $::env(GND_NET)]
+if {$m4 == "NULL" || $vpwr == "NULL" || $vgnd == "NULL"} {
+    utl::error PDN 901 "Could not find M4/VPWR/VGND for SRAM bridges."
+}
+
+$vpwr setSpecial
+$vgnd setSpecial
+set psw [odb::dbSWire_create $vpwr ROUTED]
+set gsw [odb::dbSWire_create $vgnd ROUTED]
+
+# helper to draw a Metal4 bridge
+proc bridge {sw layer x width y0 y1} {
+    set h [expr {$width/2.0}]
+    odb::dbSBox_create $sw $layer \
+        [ord::microns_to_dbu [expr {$x-$h}]] \
+        [ord::microns_to_dbu $y0] \
+        [ord::microns_to_dbu [expr {$x+$h}]] \
+        [ord::microns_to_dbu $y1] STRIPE
+}
+
+# set the overlap to 1um
+set ov 1.0
+set top0 [expr {$sy1-$ov}]
+set top1 [expr {$sy1+$ov}]
+set bot0 [expr {$sy0-$ov}]
+set bot1 [expr {$sy0+$ov}]
+
+# Actually add bridges using helper
+# Wide VPWR: VDD! at top, VDDARRAY! at bottom.
+foreach x $wide_p {
+    bridge $psw $m4 $x $WIDE $top0 $top1
+    bridge $psw $m4 $x $WIDE $bot0 $bot1
+}
+
+# Wide VSS!, narrow VDD!, and narrow VSS! reach both edges.
+foreach x $wide_g {
+    bridge $gsw $m4 $x $WIDE $top0 $top1
+    bridge $gsw $m4 $x $WIDE $bot0 $bot1
+}
+
+# Narrow connections
+foreach x $narrow_p {
+    bridge $psw $m4 $x $NARROW $top0 $top1
+    bridge $psw $m4 $x $NARROW $bot0 $bot1
+}
+foreach x $narrow_g {
+    bridge $gsw $m4 $x $NARROW $top0 $top1
+    bridge $gsw $m4 $x $NARROW $bot0 $bot1
 }

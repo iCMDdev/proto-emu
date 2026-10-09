@@ -92,6 +92,9 @@
     "RM_IHPSG13_.*"
   ],
 
+  "PDN_CONNECT_MACROS_TO_GRID": false,
+  "PDN_SKIPTRIM": true,
+
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
