@@ -1,6 +1,6 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import FallingEdge, Timer
+from cocotb.triggers import RisingEdge, Timer
 
 
 def start_clock(dut):
@@ -18,8 +18,8 @@ def encode_set(dst, imm):
     return 0x9000 | ((dst & 0x3) << 8) | (imm & 0xFF)
 
 
-async def negedge_tick(dut):
-    await FallingEdge(dut.clk)
+async def posedge_tick(dut):
+    await RisingEdge(dut.clk)
 
     # Let Verilog nonblocking assignments settle.
     # Also puts us back in a phase where we may drive signals.
@@ -34,10 +34,11 @@ async def test_unconditional_jump(dut):
     dut.rst.value = 1
     dut.instr.value = 0
 
-    await negedge_tick(dut)
+    await posedge_tick(dut)
 
-    # Check that reset sets pc to 0    
-    assert int(dut.pc.value) == 0
+    # Check that reset clears X and Y.
+    assert int(dut.x.value) == 0
+    assert int(dut.y.value) == 0
 
     # Release reset
     dut.rst.value = 0
@@ -46,9 +47,10 @@ async def test_unconditional_jump(dut):
     # 0 | E | S | COND[3:0] | ADDRESS[8:0]
     dut.instr.value = encode_jmp(0, 5)
 
-    await negedge_tick(dut)
+    await Timer(1, unit="ns")
 
-    assert int(dut.pc.value) == 5
+    # The core only signals whether the jump is taken.
+    assert int(dut.branch_taken.value) == 1
 
 
 @cocotb.test()
@@ -59,10 +61,10 @@ async def test_delay_instruction(dut):
     dut.rst.value = 1
     dut.instr.value = 0
 
-    await negedge_tick(dut)
+    await posedge_tick(dut)
 
-    # Check that reset sets pc to 0.
-    assert int(dut.pc.value) == 0
+    # Check that reset clears the delay counter.
+    assert int(dut.hold_pipeline.value) == 0
 
     # Release reset.
     dut.rst.value = 0
@@ -71,27 +73,73 @@ async def test_delay_instruction(dut):
     # 1 | 00 | 110 | DELAY[9:0]
     dut.instr.value = 0x9800
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 1
+    await posedge_tick(dut)
+    assert int(dut.hold_pipeline.value) == 0
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 2
+    # The next instruction should execute immediately.
+    dut.instr.value = encode_set(0, 0x11)
+
+    await posedge_tick(dut)
+    assert int(dut.x.value) == 0x0011
 
     # NOP 3: stall for three extra instruction slots after the NOP itself.
     dut.instr.value = 0x9803
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 3
+    await posedge_tick(dut)
+    assert int(dut.hold_pipeline.value) == 1
 
-    # Keep the delay instruction active while the counter counts down.
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 3
+    # FETCH has already advanced to the NEXT instruction.
+    # That instruction must not execute until the delay finishes.
+    dut.instr.value = encode_set(0, 0x22)
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 3
+    for _ in range(3):
+        assert int(dut.hold_pipeline.value) == 1
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 3
+        await posedge_tick(dut)
+
+        # SET X must not execute during the delay.
+        assert int(dut.x.value) == 0x0011
+
+    assert int(dut.hold_pipeline.value) == 0
+
+    # NOP 3 takes 4 total cycles.
+    # The next instruction can now execute.
+    await posedge_tick(dut)
+    assert int(dut.x.value) == 0x0022
+
+    # Test consecutive NOP instructions.
+    # The second NOP must not reload the counter during the first delay.
+    dut.instr.value = 0x9802  # NOP 2
+
+    await posedge_tick(dut)
+    assert int(dut.hold_pipeline.value) == 1
+
+    # The NEXT instruction is NOP 3.
+    dut.instr.value = 0x9803
+
+    for _ in range(2):
+        assert int(dut.hold_pipeline.value) == 1
+        await posedge_tick(dut)
+
+    assert int(dut.hold_pipeline.value) == 0
+
+    # Only now should the second NOP load its delay counter.
+    await posedge_tick(dut)
+    assert int(dut.hold_pipeline.value) == 1
+
+    dut.instr.value = encode_set(1, 0x34)
+
+    for _ in range(3):
+        assert int(dut.hold_pipeline.value) == 1
+
+        await posedge_tick(dut)
+
+        assert int(dut.y.value) == 0
+
+    assert int(dut.hold_pipeline.value) == 0
+
+    await posedge_tick(dut)
+    assert int(dut.y.value) == 0x0034
 
     # Once the delay reaches zero, test the maximum-delay NOP.
     # NOP 1023 takes 1024 total cycles
@@ -99,19 +147,24 @@ async def test_delay_instruction(dut):
     #  similarly, NOP x = 1 instruction NOP + x additional delay).
     dut.instr.value = 0x9BFF
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 4
+    await posedge_tick(dut)
+    assert int(dut.hold_pipeline.value) == 1
 
-    # Hold the maximum-delay NOP across the remaining 1023 cycles.
+    # The following instruction must wait for all 1023 extra cycles.
+    dut.instr.value = encode_set(1, 0x55)
+
     for _ in range(1023):
-        await negedge_tick(dut)
-        assert int(dut.pc.value) == 4
+        assert int(dut.hold_pipeline.value) == 1
+
+        await posedge_tick(dut)
+
+        assert int(dut.y.value) == 0x0034
+
+    assert int(dut.hold_pipeline.value) == 0
 
     # After the full delay has elapsed, the next instruction may execute.
-    dut.instr.value = 0x8000
-
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 5
+    await posedge_tick(dut)
+    assert int(dut.y.value) == 0x0055
 
 
 @cocotb.test()
@@ -121,26 +174,26 @@ async def test_set_x_y(dut):
     dut.rst.value = 1
     dut.instr.value = 0
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 0
+    await posedge_tick(dut)
+
+    assert int(dut.x.value) == 0
+    assert int(dut.y.value) == 0
 
     dut.rst.value = 0
 
     # SET X, 0xAB
     dut.instr.value = encode_set(0, 0xAB)
 
-    await negedge_tick(dut)
+    await posedge_tick(dut)
 
-    assert int(dut.pc.value) == 1
     assert int(dut.x.value) == 0x00AB
     assert int(dut.y.value) == 0x0000
 
     # SET Y, 0x34
     dut.instr.value = encode_set(1, 0x34)
 
-    await negedge_tick(dut)
+    await posedge_tick(dut)
 
-    assert int(dut.pc.value) == 2
     assert int(dut.x.value) == 0x00AB
     assert int(dut.y.value) == 0x0034
 
@@ -152,86 +205,99 @@ async def test_conditional_jumps(dut):
     dut.rst.value = 1
     dut.instr.value = 0
 
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 0
+    await posedge_tick(dut)
+
+    assert int(dut.x.value) == 0
+    assert int(dut.y.value) == 0
 
     dut.rst.value = 0
 
     # Start with X = 1 and Y = 2.
     dut.instr.value = encode_set(0, 0x01)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 1
+    await posedge_tick(dut)
+    assert int(dut.x.value) == 1
 
     dut.instr.value = encode_set(1, 0x02)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 2
+    await posedge_tick(dut)
+    assert int(dut.y.value) == 2
 
     # JMP X != 0, target 7.
     dut.instr.value = encode_jmp(2, 7)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 7
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 1
 
     # JMP X == 0 should not take while X is still nonzero.
     dut.instr.value = encode_jmp(1, 9)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 8
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 0
 
     # Clear X and check X == 0 does take.
     dut.instr.value = encode_set(0, 0x00)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 9
+    await posedge_tick(dut)
+    assert int(dut.x.value) == 0
 
     dut.instr.value = encode_jmp(1, 11)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 11
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 1
 
     # X-- != 0 does not take when X is already zero.
     dut.instr.value = encode_jmp(3, 13)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 12
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 0
+
+    await posedge_tick(dut)
     assert int(dut.x.value) == 0x0000
 
     # Reload X and check X-- != 0 takes and decrements.
     dut.instr.value = encode_set(0, 0x01)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 13
+    await posedge_tick(dut)
+    assert int(dut.x.value) == 1
 
     dut.instr.value = encode_jmp(3, 15)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 15
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 1
+
+    await posedge_tick(dut)
     assert int(dut.x.value) == 0x0000
+
+    # X must not underflow when already zero.
+    assert int(dut.branch_taken.value) == 0
 
     # Y != 0 takes while Y is nonzero.
     dut.instr.value = encode_jmp(5, 17)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 17
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 1
 
     # Y == 0 does not take while Y is nonzero.
     dut.instr.value = encode_jmp(4, 19)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 18
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 0
 
     # Clear Y, then Y == 0 takes.
     dut.instr.value = encode_set(1, 0x00)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 19
+    await posedge_tick(dut)
+    assert int(dut.y.value) == 0
 
     dut.instr.value = encode_jmp(4, 21)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 21
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 1
 
     # Y-- != 0 does not take when Y is zero.
     dut.instr.value = encode_jmp(6, 23)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 22
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 0
+
+    await posedge_tick(dut)
     assert int(dut.y.value) == 0x0000
 
     # Reload Y and check Y-- != 0 takes and decrements.
     dut.instr.value = encode_set(1, 0x02)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 23
+    await posedge_tick(dut)
+    assert int(dut.y.value) == 2
 
     dut.instr.value = encode_jmp(6, 25)
-    await negedge_tick(dut)
-    assert int(dut.pc.value) == 25
+    await Timer(1, unit="ns")
+    assert int(dut.branch_taken.value) == 1
+
+    await posedge_tick(dut)
     assert int(dut.y.value) == 0x0001

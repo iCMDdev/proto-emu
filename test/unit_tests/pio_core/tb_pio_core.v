@@ -1,26 +1,28 @@
 /*
- * Copyright (c) 2026 Cristian Dinca 
+ * Copyright (c) 2026 Cristian Dinca
  * SPDX-License-Identifier: Apache-2.0
  */
 
 `default_nettype none
 `timescale 1ns / 1ps
 
-/* This testbench tests the pio core.
-*/
+/* This testbench tests the EXEC stage of the PIO core. */
 module tb_pio_core ();
-    
     reg         clk;
     reg         rst;
     reg  [15:0] instr;
 
-    wire [8:0]  pc;
+    wire        branch_taken;
+    wire        hold_pipeline;
 
-    pio_core dut (
+    pio_core #(
+        .USE_NEGEDGE(0)
+    ) dut (
         .clk(clk),
         .rst(rst),
         .instr(instr),
-        .pc(pc)
+        .branch_taken(branch_taken),
+        .hold_pipeline(hold_pipeline)
     );
 
     // Dump the signals to a FST file. You can view it with gtkwave or surfer.
@@ -32,5 +34,6 @@ module tb_pio_core ();
         $dumpfile("pio_core.fst");
         $dumpvars(0, tb_pio_core);
     end
-
 endmodule
+
+`default_nettype wire

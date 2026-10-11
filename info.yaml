@@ -23,6 +23,9 @@ project:
     - "register.v"
     - "pc_register.v"
     - "delay_counter.v"
+    - "pipeline_fetch.v"
+    - "bootrom.v"
+    - "shift_register.v"
     # - "proto_logo.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
