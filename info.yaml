@@ -26,6 +26,7 @@ project:
     - "pipeline_fetch.v"
     - "bootrom.v"
     - "shift_register.v"
+    - "gpio.v"
     # - "proto_logo.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.

@@ -19,12 +19,12 @@ module tt_um_example (
   // All output pins must be assigned. If not used, assign to 0.
   
   // just some values for preventing optimizations, for now. TOOD: replace later.
-  assign uo_out = pc[7:0];
-  assign uio_out = {7'b0, pc[8]};
-  assign uio_oe  = 8'b0000_0001;
+//   assign uo_out = pc[7:0];
+//   assign uio_out = {7'b0, pc[8]};
+//   assign uio_oe  = 8'b0000_0001;
 
   // List all unused inputs to prevent warnings
-  wire _unused = &{ena, ui_in, uio_in, 1'b0};
+//   wire _unused = &{ena, ui_in, uio_in, 1'b0};
 
   wire [8:0] pc = sram_address_a;
   wire [15:0] instr;
@@ -155,6 +155,45 @@ module tt_um_example (
       .B_BIST_BM(16'b0)
   );
 
+  // MARK: GPIO
+  wire        gpio_en;
+  wire [2:0]  gpio_op;
+  wire [3:0]  gpio_pin;
+  wire        gpio_dir;
+  wire        gpio_value_in;
+  wire        gpio_value_out;
+  wire [15:0] gpio_multi_mask = 16'hffff;
+  wire [15:0] gpio_multi_value_out = 16'h0000;
+  wire [15:0] gpio_multi_value_in;
+  wire        gpio_side_set_en;
+  wire        gpio_side_set_value;
+  wire  [3:0]  gpio_side_set_pin;
+
+  gpio gpio_iface (
+    .clk(clk),
+    .rst(rst),
+    .enable(gpio_en | gpio_side_set_en),
+
+    .ui_in(ui_in),
+    .uo_out(uo_out),
+    .uio_in(uio_in),
+    .uio_out(uio_out),
+    .uio_oe(uio_oe),
+
+    .op_setting(gpio_op),
+    .pin_number(gpio_pin),
+    .pin_direction(gpio_dir),
+    .pin_value_out(gpio_value_out),
+    .pin_value_in(gpio_value_in),
+
+    .multi_mask(gpio_multi_mask),
+    .multi_value_out(gpio_multi_value_out),
+    .multi_value_in(gpio_multi_value_in),
+
+    .side_set_enable(gpio_side_set_en),
+    .side_set_value(gpio_side_set_value),
+    .side_set_pin(gpio_side_set_pin)
+  );
 
   // MARK: Execute
   assign instr = boot_from_rom ? rom_instr : sram_instruction;
@@ -173,7 +212,19 @@ module tt_um_example (
       
       .program_write_enable(program_write_enable),
       .program_write_address(program_write_address),
-      .program_write_data(program_write_data)
+      .program_write_data(program_write_data),
+
+      .gpio_side_set_en(gpio_side_set_en),
+      .gpio_side_set_value(gpio_side_set_value),
+      .gpio_side_set_pin(gpio_side_set_pin),
+
+      .gpio_en(gpio_en),
+      .gpio_op(gpio_op),
+      .gpio_pindir(gpio_dir),
+      .gpio_pin(gpio_pin),
+      .gpio_value_out(gpio_value_out),
+      .gpio_value_in(gpio_value_in),
+      .gpio_pins_in(gpio_multi_value_in)
   );
 
 //   (* keep *)
