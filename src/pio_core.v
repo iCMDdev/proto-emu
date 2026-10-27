@@ -31,7 +31,17 @@ module pio_core #(
     output reg  [3:0]   gpio_pin,
     output reg          gpio_value_out,
     input  wire         gpio_value_in,
-    input  wire [15:0]  gpio_pins_in
+    input  wire [15:0]  gpio_pins_in,
+
+    input  wire [63:0] rx_fifo_data,
+    input  wire        rx_fifo_can_pull,
+    output reg         rx_fifo_pull,
+    output reg  [3:0]  rx_fifo_bytes_cnt,
+
+    output reg  [63:0] tx_fifo_data,
+    input  wire        tx_fifo_can_push,
+    output reg         tx_fifo_push,
+    output reg  [3:0]  tx_fifo_bytes_cnt
 );
     // MARK: Side-set
     assign gpio_side_set_en = instr[14] && !hold_pipeline && !rst;
@@ -137,11 +147,32 @@ module pio_core #(
     assign setpin_num = instr[7:4];
     assign setpin_val = instr[0];
 
-    // MARK: FIFO PUSH / PULL  Fields
-    wire [1:0] fifo_opmode = instr[9:8]; // 00=PUSH, 01=PULL, 10=PUSH_IMM
-    wire [2:0] fifo_register = instr[7:5];
+    // MARK: FIFO PUSH / PULL Fields
+    wire [1:0] fifo_opmode = instr[9:8];    // 00=PUSH, 01=PULL, 10=PUSH_IMM
+    wire [2:0] fifo_register = instr[7:5];  
     wire [2:0] fifo_byte_cnt = instr[4:2];
     wire [7:0] fifo_imm8 = instr[7:0];
+
+    wire is_fifo = instr[15] && (op == 3'b000);
+    wire fifo_reg_valid = (fifo_register == 3'd0) ||
+                          (fifo_register == 3'd1);
+
+    wire fifo_stall = is_fifo &&
+                    (
+                        // PUSH X/Y
+                        ((fifo_opmode == 2'b00) &&
+                        fifo_reg_valid &&
+                        !tx_fifo_can_push) ||
+
+                        // PULL X/Y
+                        ((fifo_opmode == 2'b01) &&
+                        fifo_reg_valid &&
+                        !rx_fifo_can_pull) ||
+
+                        // PUSH immediate
+                        ((fifo_opmode == 2'b10) &&
+                        !tx_fifo_can_push)
+                    );
 
     // byte count is encoded -1.
     wire [3:0] fifo_num_bytes = {1'b0, fifo_byte_cnt} + 4'd1;
@@ -163,7 +194,7 @@ module pio_core #(
     // if this is a delay instruction, load the counter,
     // but only if it isn't already loaded
     assign delay_load = is_delay && (delay_out == 0);
-    assign hold_pipeline = (delay_out != 0);
+    assign hold_pipeline = (delay_out != 0) || fifo_stall;
 
     delay_counter #(
         .USE_NEGEDGE(USE_NEGEDGE)
@@ -209,30 +240,29 @@ module pio_core #(
         shift_count = 8;
         shift_data = {{(REGISTER_WIDTH-8){1'b0}}, instr[7:0]};
         mov_data = 0;
+        tx_fifo_push  = 1'b0;
+        tx_fifo_data  = 64'b0;
+        tx_fifo_bytes_cnt = (fifo_opmode == 2'b10) ? 4'd1 : fifo_num_bytes;
+        rx_fifo_pull  = 1'b0;
+        rx_fifo_bytes_cnt = fifo_num_bytes;
 
-        if (!hold_pipeline) begin
+        if (!hold_pipeline && !rst) begin
             // instr[15] == 0 means JMP
             if (instr[15] == 1'b0) begin
                 case (jmp_cond)
                     4'd0: begin // ALWAYS
                         branch_taken = 1'b1;
-                        // pc_load      = 1'b1;
-                        // pc_load_addr = jmp_addr;
                     end
 
                     4'd1: begin // X == 0
                         if (x == 0) begin
                             branch_taken = 1'b1;
-                            // pc_load      = 1'b1;
-                            // pc_load_addr = jmp_addr;
                         end
                     end
 
                     4'd2: begin // X != 0
                         if (x != 0) begin
                             branch_taken = 1'b1;
-                            // pc_load      = 1'b1;
-                            // pc_load_addr = jmp_addr;
                         end
                     end
 
@@ -241,24 +271,18 @@ module pio_core #(
                             branch_taken = 1'b1;
                             x_we         = 1'b1;
                             x_data_in    = x_minus_1;
-                            // pc_load      = 1'b1;
-                            // pc_load_addr = jmp_addr;
                         end
                     end
 
                     4'd4: begin // Y == 0
                         if (y == 0) begin
                             branch_taken = 1'b1;
-                            // pc_load      = 1'b1;
-                            // pc_load_addr = jmp_addr;
                         end
                     end
 
                     4'd5: begin // Y != 0
                         if (y != 0) begin
                             branch_taken = 1'b1;
-                            // pc_load      = 1'b1;
-                            // pc_load_addr = jmp_addr;
                         end
                     end
 
@@ -267,8 +291,6 @@ module pio_core #(
                             branch_taken = 1'b1;
                             y_we         = 1'b1;
                             y_data_in    = y_minus_1;
-                            // pc_load      = 1'b1;
-                            // pc_load_addr = jmp_addr;
                         end
                     end
 
@@ -294,16 +316,46 @@ module pio_core #(
                 case (op)
                     3'b000: begin  // FIFO operations (PUSH/PULL)
                         case (fifo_opmode)
-                            2'b00: begin
-                                // push
+                            2'b00: begin // PUSH
+                                case (fifo_register)
+                                    3'd0: begin // X
+                                        tx_fifo_data = x;
+                                        tx_fifo_push = 1'b1;
+                                    end
+
+                                    3'd1: begin // Y
+                                        tx_fifo_data = y;
+                                        tx_fifo_push = 1'b1;
+                                    end
+
+                                    default: begin
+                                    end
+                                endcase
                             end
 
-                            2'b01: begin
-                                // pull
+                            2'b01: begin // PULL
+                                case (fifo_register)
+                                    3'd0: begin // X
+                                        rx_fifo_pull = 1'b1;
+                                        x_we = 1'b1;
+                                        x_data_in = rx_fifo_data;
+                                    end
+
+                                    3'd1: begin // Y
+                                        rx_fifo_pull = 1'b1;
+                                        y_we = 1'b1;
+                                        y_data_in = rx_fifo_data;
+                                    end
+
+                                    default: begin
+                                    end
+                                endcase
                             end
 
                             2'b10: begin
                                 // push 1-byte immediate
+                                tx_fifo_data = {56'b0, fifo_imm8};
+                                tx_fifo_push = 1'b1;
                             end
 
                             2'b11: begin

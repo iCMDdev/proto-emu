@@ -195,6 +195,74 @@ module tt_um_example (
     .side_set_pin(gpio_side_set_pin)
   );
 
+  // MARK: RX / TX FIFOs
+  wire        host_rx_push;
+  wire [7:0]  host_rx_data;
+  wire        host_rx_ready;
+
+  wire        host_tx_pull;
+  wire [7:0]  host_tx_data;
+  wire        host_tx_valid;
+
+  wire        pio_rx_pull;
+  wire [3:0]  pio_rx_bytes_cnt;
+  wire [63:0] pio_rx_data;
+  wire        pio_rx_valid;
+
+  wire        pio_tx_push;
+  wire [3:0]  pio_tx_bytes_cnt;
+  wire [63:0] pio_tx_data;
+  wire        pio_tx_ready;
+
+  wire [63:0] tx_fifo_out;
+  wire [5:0] rx_count, tx_count;
+
+  assign host_tx_data = tx_fifo_out[7:0];
+
+  // HOST -> RX FIFO -> Protocol Emulator Engine
+  ringbuffer_fifo #(
+      .DEPTH(32),
+      .DATA_WIDTH(8)
+  ) rx_fifo (
+      .clk(clk),
+      .rst(rst),
+
+      .push(host_rx_push),
+      .pull(pio_rx_pull),
+
+      .push_byte_count(4'd1),
+      .pull_byte_count(pio_rx_bytes_cnt),
+
+      .data_in({56'b0, host_rx_data}),
+      .data_out(pio_rx_data),
+
+      .count(rx_count),
+      .can_push(host_rx_ready),
+      .can_pull(pio_rx_valid)
+  );
+
+  // Proto Emu Engine -> TX FIFO -> HOST
+  ringbuffer_fifo #(
+      .DEPTH(32),
+      .DATA_WIDTH(8)
+  ) tx_fifo (
+      .clk(clk),
+      .rst(rst),
+
+      .push(pio_tx_push),
+      .pull(host_tx_pull),
+
+      .push_byte_count(pio_tx_bytes_cnt),
+      .pull_byte_count(4'd1),
+
+      .data_in(pio_tx_data),
+      .data_out(tx_fifo_out),
+
+      .count(tx_count),
+      .can_push(pio_tx_ready),
+      .can_pull(host_tx_valid)
+  );
+
   // MARK: Execute
   assign instr = boot_from_rom ? rom_instr : sram_instruction;
 
@@ -224,8 +292,24 @@ module tt_um_example (
       .gpio_pin(gpio_pin),
       .gpio_value_out(gpio_value_out),
       .gpio_value_in(gpio_value_in),
-      .gpio_pins_in(gpio_multi_value_in)
+      .gpio_pins_in(gpio_multi_value_in),
+
+      .rx_fifo_data(pio_rx_data),
+      .rx_fifo_can_pull(pio_rx_valid),
+      .rx_fifo_pull(pio_rx_pull),
+      .rx_fifo_bytes_cnt(pio_rx_bytes_cnt),
+
+      .tx_fifo_data(pio_tx_data),
+      .tx_fifo_can_push(pio_tx_ready),
+      .tx_fifo_push(pio_tx_push),
+      .tx_fifo_bytes_cnt(pio_tx_bytes_cnt)
   );
+
+  // Temporary host stub until communication is implemented
+  // TODO: Implement host communication.
+  assign host_rx_push = 1'b0;
+  assign host_rx_data = 8'b0;
+  assign host_tx_pull = 1'b0;
 
 //   (* keep *)
 //   proto_logo logo();

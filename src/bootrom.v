@@ -32,7 +32,9 @@ module bootrom (
             boot_from_rom <= 1'b0;
     end
 
-    // MARK: Boot ROM
+    // MARK: Boot ROM (currently just a demo boot rom!!)
+    // TODO: Implement proper boot rom that reads commands from host
+    // and writes SRAM, then jumps to SRAMLAND.
     function [15:0] boot_rom;
         input [8:0] addr;
         begin

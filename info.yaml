@@ -27,6 +27,7 @@ project:
     - "bootrom.v"
     - "shift_register.v"
     - "gpio.v"
+    - "ringbuffer_fifo.v"
     # - "proto_logo.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
