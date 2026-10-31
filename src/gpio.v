@@ -23,8 +23,7 @@
 
     Outputs are set on clock, but the logic is combinational.
 */
-module gpio #(
-)(
+module gpio (
     input  wire       clk,
     input  wire       rst,
     input  wire       enable,
