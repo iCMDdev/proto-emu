@@ -57,10 +57,12 @@ set WIDE   4.42
 set NARROW 2.81
 set NORMAL $::env(PDN_VWIDTH)
 
-# Define the PDN grid
+# Generate the physical PDN as before, but do not promote every generated
+# segment into a block pin: pdngen cuts stripes at the SRAM and may insert
+# short edge-repair stripes. Both fail the Tiny Tapeout power-pin check.
+# Fixed, full-height block pins are created explicitly below.
 define_pdn_grid -name stdcell_grid \
-    -starts_with POWER -voltage_domains {CORE} \
-    -pins $::env(PDN_VERTICAL_LAYER)
+    -starts_with POWER -voltage_domains {CORE}
 
 # Add standard cell rails if enabled
 if {$::env(PDN_ENABLE_RAILS) == 1} {
@@ -81,7 +83,10 @@ proc m4stripe {net width x core_xmin} {
 }
 
 # Preserve the normal 2.1um/50um grid outside the SRAM X-span.
-# The SRAM X-span is intentionally replaced by aligned feeder stripes.
+# Remember intended normal stripes for export as block pins; this avoids
+# accidentally exporting short PDN channel-repair stripes at the left edge.
+set export_power {}
+set export_ground {}
 
 # Calculate the coordinate of the first normal (i.e. non-SRAM) stripes
 set px [expr {$cx0 + $::env(PDN_VOFFSET)}]
@@ -97,17 +102,31 @@ for {set n 0} {1} {incr n} {
     # add each stripe if it is inside the SRAM & core
     if {$p <= $cx1 && ($p < $sx0 || $p > $sx1)} {
         m4stripe $::env(VDD_NET) $NORMAL $p $cx0
+        lappend export_power [list $p $NORMAL]
     }
     if {$g <= $cx1 && ($g < $sx0 || $g > $sx1)} {
         m4stripe $::env(GND_NET) $NORMAL $g $cx0
+        lappend export_ground [list $g $NORMAL]
     }
 }
 
 # SRAM-aligned M4 feeders
-foreach x $wide_p   { m4stripe $::env(VDD_NET) $WIDE   $x $cx0 }
-foreach x $wide_g   { m4stripe $::env(GND_NET) $WIDE   $x $cx0 }
-foreach x $narrow_p { m4stripe $::env(VDD_NET) $NARROW $x $cx0 }
-foreach x $narrow_g { m4stripe $::env(GND_NET) $NARROW $x $cx0 }
+foreach x $wide_p {
+    m4stripe $::env(VDD_NET) $WIDE $x $cx0
+    lappend export_power [list $x $WIDE]
+}
+foreach x $wide_g {
+    m4stripe $::env(GND_NET) $WIDE $x $cx0
+    lappend export_ground [list $x $WIDE]
+}
+foreach x $narrow_p {
+    m4stripe $::env(VDD_NET) $NARROW $x $cx0
+    lappend export_power [list $x $NARROW]
+}
+foreach x $narrow_g {
+    m4stripe $::env(GND_NET) $NARROW $x $cx0
+    lappend export_ground [list $x $NARROW]
+}
 
 # Connect cells to PDN if needed (i.e. vias)
 if {$::env(PDN_ENABLE_RAILS) == 1} {
@@ -116,63 +135,72 @@ if {$::env(PDN_ENABLE_RAILS) == 1} {
 }
 
 
-# Problem: PDNGen does not connect th PDN stripes to the macro - it
-# clips those stripes, and a gap exists between the macro and those
-# stripes. We need to add some bridges that fill that tiny gap with
-# same-layer Metal4.
-
-# Get Metal4 layer
+# Full-height, SRAM-aligned Metal4 stripes and matching fixed block pins.
+# This runs before pdngen, but unlike add_pdn_stripe, dbSBox_create inserts
+# physical metal directly rather than trimming it around a macro obstruction.
+# The 24 X coordinates above were chosen to coincide with SRAM PG columns.
+# Validate that these columns are actually safe in the full macro GDS.
 set tech [ord::get_db_tech]
 set m4 [$tech findLayer $::env(PDN_VERTICAL_LAYER)]
-
-# Get the Vdd and GND nets
 set vpwr [$block findNet $::env(VDD_NET)]
 set vgnd [$block findNet $::env(GND_NET)]
 if {$m4 == "NULL" || $vpwr == "NULL" || $vgnd == "NULL"} {
-    utl::error PDN 901 "Could not find M4/VPWR/VGND for SRAM bridges."
+    utl::error PDN 901 "Cannot find vertical PDN layer or power nets."
 }
+
+# Use the existing core Y interval: in the supplied run it was 3.560..707.080um.
+set cy0 [ord::dbu_to_microns [$cb yMin]]
+set cy1 [ord::dbu_to_microns [$cb yMax]]
 
 $vpwr setSpecial
 $vgnd setSpecial
 set psw [odb::dbSWire_create $vpwr ROUTED]
 set gsw [odb::dbSWire_create $vgnd ROUTED]
 
-# helper to draw a Metal4 bridge
-proc bridge {sw layer x width y0 y1} {
-    set h [expr {$width/2.0}]
+# Physical wire only. The same rectangle will also be marked as a block pin.
+proc fullheight_wire {sw layer x width y0 y1} {
+    set half [expr {$width / 2.0}]
     odb::dbSBox_create $sw $layer \
-        [ord::microns_to_dbu [expr {$x-$h}]] \
+        [ord::microns_to_dbu [expr {$x - $half}]] \
         [ord::microns_to_dbu $y0] \
-        [ord::microns_to_dbu [expr {$x+$h}]] \
+        [ord::microns_to_dbu [expr {$x + $half}]] \
         [ord::microns_to_dbu $y1] STRIPE
 }
 
-# set the overlap to 1um
-set ov 1.0
-set top0 [expr {$sy1-$ov}]
-set top1 [expr {$sy1+$ov}]
-set bot0 [expr {$sy0-$ov}]
-set bot1 [expr {$sy0+$ov}]
+foreach x $wide_p   { fullheight_wire $psw $m4 $x $WIDE   $cy0 $cy1 }
+foreach x $wide_g   { fullheight_wire $gsw $m4 $x $WIDE   $cy0 $cy1 }
+foreach x $narrow_p { fullheight_wire $psw $m4 $x $NARROW $cy0 $cy1 }
+foreach x $narrow_g { fullheight_wire $gsw $m4 $x $NARROW $cy0 $cy1 }
 
-# Actually add bridges using helper
-# Wide VPWR: VDD! at top, VDDARRAY! at bottom.
-foreach x $wide_p {
-    bridge $psw $m4 $x $WIDE $top0 $top1
-    bridge $psw $m4 $x $WIDE $bot0 $bot1
+# A dbBTerm is a named module connection; each dbBPin is an actual rectangle
+# in that connection's pin definition. FIRM makes it survive pdngen, which
+# otherwise deletes non-fixed existing pin shapes.
+proc fixed_power_ports {block net name sigtype layer stripes y0 y1} {
+    set bt [$block findBTerm $name]
+    if {$bt == "NULL"} {
+        set bt [odb::dbBTerm_create $net $name]
+    } elseif {[$bt getNet] != $net} {
+        utl::error PDN 902 "BTerm $name is attached to a different net."
+    }
+    $bt setIoType INOUT
+    $bt setSigType $sigtype
+    $bt setSpecial
+    if {[llength [$bt getBPins]] != 0} {
+        utl::error PDN 903 "BTerm $name already has pin boxes; refusing to duplicate."
+    }
+    foreach stripe $stripes {
+        lassign $stripe x width
+        set half [expr {$width / 2.0}]
+        set xl [ord::microns_to_dbu [expr {$x - $half}]]
+        set xr [ord::microns_to_dbu [expr {$x + $half}]]
+        set yb [ord::microns_to_dbu $y0]
+        set yt [ord::microns_to_dbu $y1]
+        set bp [odb::dbBPin_create $bt]
+        odb::dbBox_create $bp $layer $xl $yb $xr $yt
+        $bp setPlacementStatus FIRM
+    }
+    puts "[llength $stripes] fixed Metal4 block-pin rectangles on $name"
 }
 
-# Wide VSS!, narrow VDD!, and narrow VSS! reach both edges.
-foreach x $wide_g {
-    bridge $gsw $m4 $x $WIDE $top0 $top1
-    bridge $gsw $m4 $x $WIDE $bot0 $bot1
-}
-
-# Narrow connections
-foreach x $narrow_p {
-    bridge $psw $m4 $x $NARROW $top0 $top1
-    bridge $psw $m4 $x $NARROW $bot0 $bot1
-}
-foreach x $narrow_g {
-    bridge $gsw $m4 $x $NARROW $top0 $top1
-    bridge $gsw $m4 $x $NARROW $bot0 $bot1
-}
+fixed_power_ports $block $vpwr $::env(VDD_NET) POWER $m4 $export_power $cy0 $cy1
+fixed_power_ports $block $vgnd $::env(GND_NET) GROUND $m4 $export_ground $cy0 $cy1
