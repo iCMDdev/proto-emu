@@ -12,7 +12,13 @@ PROJECT_SOURCES = \
 	pio_core.v \
 	register.v \
 	pc_register.v \
-	delay_counter.v
+	delay_counter.v \
+	pipeline_fetch.v \
+	bootrom.v \
+	shift_register.v \
+	gpio.v \
+	ringbuffer_fifo.v \
+	spi_host.v
 
 ifneq ($(GATES),yes)
 

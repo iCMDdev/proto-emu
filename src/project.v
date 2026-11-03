@@ -26,9 +26,11 @@ module tt_um_example (
   // List all unused inputs to prevent warnings
 //   wire _unused = &{ena, ui_in, uio_in, 1'b0};
 
+  wire [8:0] sram_address_a;
   wire [8:0] pc = sram_address_a;
   wire [15:0] instr;
-
+  wire branch_taken;
+  wire hold_pipeline;
 
   // MARK: Reset & restart
   wire rst = !rst_n; // rst is HIGH to reset internally
@@ -56,15 +58,11 @@ module tt_um_example (
 
 
   // MARK: Pipeline fetch
-  wire [8:0] sram_address_a;
   wire [8:0] sram_address_b;
 
   wire [15:0] sram_instr_a;
   wire [15:0] sram_instr_b;
   wire [15:0] sram_instruction;
-
-  wire branch_taken;
-  wire hold_pipeline;
 
   // SRAN FETCH signals are helpful only outside BootROM!
   wire fetch_branch_taken = !boot_from_rom && !rst && branch_taken;
@@ -167,15 +165,16 @@ module tt_um_example (
   wire [15:0] gpio_multi_value_in;
   wire        gpio_side_set_en;
   wire        gpio_side_set_value;
-  wire  [3:0]  gpio_side_set_pin;
+  wire [3:0]  gpio_side_set_pin;
+  wire [7:0]  gpio_uo_out;
 
   gpio gpio_iface (
     .clk(clk),
     .rst(rst),
     .enable(gpio_en | gpio_side_set_en),
 
-    .ui_in(ui_in),
-    .uo_out(uo_out),
+    .ui_in({ui_in[7:3], 3'b000}),
+    .uo_out(gpio_uo_out),
     .uio_in(uio_in),
     .uio_out(uio_out),
     .uio_oe(uio_oe),
@@ -205,16 +204,16 @@ module tt_um_example (
   wire        host_tx_valid;
 
   wire        pio_rx_pull;
-  wire [3:0]  pio_rx_bytes_cnt;
-  wire [63:0] pio_rx_data;
+  wire [2:0]  pio_rx_bytes_cnt;
+  wire [31:0] pio_rx_data;
   wire        pio_rx_valid;
 
   wire        pio_tx_push;
-  wire [3:0]  pio_tx_bytes_cnt;
-  wire [63:0] pio_tx_data;
+  wire [2:0]  pio_tx_bytes_cnt;
+  wire [31:0] pio_tx_data;
   wire        pio_tx_ready;
 
-  wire [63:0] tx_fifo_out;
+  wire [31:0] tx_fifo_out;
   wire [5:0] rx_count, tx_count;
 
   assign host_tx_data = tx_fifo_out[7:0];
@@ -222,7 +221,7 @@ module tt_um_example (
   // HOST -> RX FIFO -> Protocol Emulator Engine
   ringbuffer_fifo #(
       .DEPTH(32),
-      .DATA_WIDTH(8)
+      .DATA_WIDTH(4)
   ) rx_fifo (
       .clk(clk),
       .rst(rst),
@@ -230,10 +229,10 @@ module tt_um_example (
       .push(host_rx_push),
       .pull(pio_rx_pull),
 
-      .push_byte_count(4'd1),
+      .push_byte_count(3'd1),
       .pull_byte_count(pio_rx_bytes_cnt),
 
-      .data_in({56'b0, host_rx_data}),
+      .data_in({24'b0, host_rx_data}),
       .data_out(pio_rx_data),
 
       .count(rx_count),
@@ -244,7 +243,7 @@ module tt_um_example (
   // Proto Emu Engine -> TX FIFO -> HOST
   ringbuffer_fifo #(
       .DEPTH(32),
-      .DATA_WIDTH(8)
+      .DATA_WIDTH(4)
   ) tx_fifo (
       .clk(clk),
       .rst(rst),
@@ -253,7 +252,7 @@ module tt_um_example (
       .pull(host_tx_pull),
 
       .push_byte_count(pio_tx_bytes_cnt),
-      .pull_byte_count(4'd1),
+      .pull_byte_count(3'd1),
 
       .data_in(pio_tx_data),
       .data_out(tx_fifo_out),
@@ -307,9 +306,34 @@ module tt_um_example (
 
   // Temporary host stub until communication is implemented
   // TODO: Implement host communication.
-  assign host_rx_push = 1'b0;
-  assign host_rx_data = 8'b0;
-  assign host_tx_pull = 1'b0;
+  // MARK: SPI Host Interface
+  wire spi_miso;
+
+  spi_host spi_host_inst (
+      .clk(clk),
+      .rst(rst),
+
+      // SPI Mode 0
+      .spi_sclk(ui_in[0]),
+      .spi_mosi(ui_in[1]),
+      .spi_cs_n(ui_in[2]),
+      .spi_miso(spi_miso),
+
+      // Host -> RX FIFO
+      .host_rx_push(host_rx_push),
+      .host_rx_data(host_rx_data),
+      .host_rx_ready(host_rx_ready),
+      .rx_count(rx_count),
+
+      // TX FIFO -> Host
+      .host_tx_pull(host_tx_pull),
+      .host_tx_data(host_tx_data),
+      .host_tx_valid(host_tx_valid),
+      .tx_count(tx_count)
+  );
+
+  // Reserve uo_out[7] for SPI MISO
+  assign uo_out = {spi_miso, gpio_uo_out[6:0]};
 
 //   (* keep *)
 //   proto_logo logo();

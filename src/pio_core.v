@@ -7,7 +7,7 @@
 
 module pio_core #(
     parameter USE_NEGEDGE = 0,
-    parameter REGISTER_WIDTH = 64
+    parameter REGISTER_WIDTH = 32
 )(
     input  wire         clk,
     input  wire         rst,
@@ -33,15 +33,15 @@ module pio_core #(
     input  wire         gpio_value_in,
     input  wire [15:0]  gpio_pins_in,
 
-    input  wire [63:0] rx_fifo_data,
+    input  wire [REGISTER_WIDTH-1:0] rx_fifo_data,
     input  wire        rx_fifo_can_pull,
     output reg         rx_fifo_pull,
-    output reg  [3:0]  rx_fifo_bytes_cnt,
+    output reg  [2:0]  rx_fifo_bytes_cnt,
 
-    output reg  [63:0] tx_fifo_data,
+    output reg  [REGISTER_WIDTH-1:0] tx_fifo_data,
     input  wire        tx_fifo_can_push,
     output reg         tx_fifo_push,
-    output reg  [3:0]  tx_fifo_bytes_cnt
+    output reg  [2:0]  tx_fifo_bytes_cnt
 );
     // MARK: Side-set
     assign gpio_side_set_en = instr[14] && !hold_pipeline && !rst;
@@ -150,7 +150,7 @@ module pio_core #(
     // MARK: FIFO PUSH / PULL Fields
     wire [1:0] fifo_opmode = instr[9:8];    // 00=PUSH, 01=PULL, 10=PUSH_IMM
     wire [2:0] fifo_register = instr[7:5];  
-    wire [2:0] fifo_byte_cnt = instr[4:2];
+    wire [1:0] fifo_byte_cnt = instr[3:2];
     wire [7:0] fifo_imm8 = instr[7:0];
 
     wire is_fifo = instr[15] && (op == 3'b000);
@@ -175,7 +175,7 @@ module pio_core #(
                     );
 
     // byte count is encoded -1.
-    wire [3:0] fifo_num_bytes = {1'b0, fifo_byte_cnt} + 4'd1;
+    wire [2:0] fifo_num_bytes = {1'b0, fifo_byte_cnt} + 3'd1;
 
     // MARK: MOV fields
     wire [1:0] mov_dst = instr[9:8];
@@ -241,8 +241,8 @@ module pio_core #(
         shift_data = {{(REGISTER_WIDTH-8){1'b0}}, instr[7:0]};
         mov_data = 0;
         tx_fifo_push  = 1'b0;
-        tx_fifo_data  = 64'b0;
-        tx_fifo_bytes_cnt = (fifo_opmode == 2'b10) ? 4'd1 : fifo_num_bytes;
+        tx_fifo_data = {REGISTER_WIDTH{1'b0}};
+        tx_fifo_bytes_cnt = (fifo_opmode == 2'b10) ? 3'd1 : fifo_num_bytes;
         rx_fifo_pull  = 1'b0;
         rx_fifo_bytes_cnt = fifo_num_bytes;
 
@@ -354,7 +354,7 @@ module pio_core #(
 
                             2'b10: begin
                                 // push 1-byte immediate
-                                tx_fifo_data = {56'b0, fifo_imm8};
+                                tx_fifo_data = {{(REGISTER_WIDTH-8){1'b0}}, fifo_imm8};
                                 tx_fifo_push = 1'b1;
                             end
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2024 Cristian Dinca
+ * Copyright (c) 2026 Cristian Dinca
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -48,7 +48,7 @@
 // when wrapping around the end of the FIFO.
 module ringbuffer_fifo  #(
     parameter integer DEPTH = 32,    // total FIFO capacity
-    parameter integer DATA_WIDTH = 8 // max bytes in a single PUSH / PULL command
+    parameter integer DATA_WIDTH = 4 // max bytes in a single PUSH / PULL command
 ) (
     input  wire clk,
     input  wire rst,

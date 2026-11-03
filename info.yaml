@@ -28,6 +28,7 @@ project:
     - "shift_register.v"
     - "gpio.v"
     - "ringbuffer_fifo.v"
+    - "spi_host.v"
     # - "proto_logo.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
