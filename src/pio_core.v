@@ -30,6 +30,8 @@ module pio_core #(
     output reg          gpio_pindir,
     output reg  [3:0]   gpio_pin,
     output reg          gpio_value_out,
+    output reg  [15:0]  gpio_multi_mask,
+    output reg  [15:0]  gpio_multi_value_out,
     input  wire         gpio_value_in,
     input  wire [15:0]  gpio_pins_in,
 
@@ -67,10 +69,21 @@ module pio_core #(
         end
     endgenerate
 
+
+    // MARK: Shared shift control
+    reg       shift_en;
+    reg       shift_right;
+    reg [1:0] shift_dst;
+
+    wire x_shift = shift_en && (shift_dst == 2'b00);
+    wire y_shift = shift_en && (shift_dst == 2'b01);
+    wire a_shift = shift_en && (shift_dst == 2'b10);
+    wire b_shift = shift_en && (shift_dst == 2'b11);
+
+
     // MARK: X register
     reg                                 x_we;
     reg  [REGISTER_WIDTH-1:0]           x_data_in;
-    reg                                 x_shift;
     wire [REGISTER_WIDTH-1:0]           x;
     reg  [$clog2(REGISTER_WIDTH)-1:0]   shift_count;
     reg  [REGISTER_WIDTH-1:0]           shift_data;
@@ -83,7 +96,7 @@ module pio_core #(
         .rst(rst),
         .load(x_we),
         .shift(x_shift),
-        .shift_right(1'b0),
+        .shift_right(shift_right),
         .shift_count(shift_count),
         .data_in(x_data_in),
         .shift_in(shift_data),
@@ -93,7 +106,6 @@ module pio_core #(
     // MARK: Y register
     reg                                 y_we;
     reg  [REGISTER_WIDTH-1:0]           y_data_in;
-    reg                                 y_shift;
     wire [REGISTER_WIDTH-1:0]           y;
 
     shift_register #(
@@ -104,12 +116,74 @@ module pio_core #(
         .rst(rst),
         .load(y_we),
         .shift(y_shift),
-        .shift_right(1'b0),
+        .shift_right(shift_right),
         .shift_count(shift_count),
         .data_in(y_data_in),
         .shift_in(shift_data),
         .data_out(y)
     );
+
+
+    // MARK: A register
+    reg                       a_we;
+    reg  [REGISTER_WIDTH-1:0] a_data_in;
+    wire [REGISTER_WIDTH-1:0] a;
+
+    shift_register #(
+        .WIDTH(REGISTER_WIDTH),
+        .USE_NEGEDGE(USE_NEGEDGE)
+    ) a_reg (
+        .clk(clk),
+        .rst(rst),
+        .load(a_we),
+        .shift(a_shift),
+        .shift_right(shift_right),
+        .shift_count(shift_count),
+        .data_in(a_data_in),
+        .shift_in(shift_data),
+        .data_out(a)
+    );
+
+    // MARK: B register
+    reg                       b_we;
+    reg  [REGISTER_WIDTH-1:0] b_data_in;
+    wire [REGISTER_WIDTH-1:0] b;
+
+    shift_register #(
+        .WIDTH(REGISTER_WIDTH),
+        .USE_NEGEDGE(USE_NEGEDGE)
+    ) b_reg (
+        .clk(clk),
+        .rst(rst),
+        .load(b_we),
+        .shift(b_shift),
+        .shift_right(shift_right),
+        .shift_count(shift_count),
+        .data_in(b_data_in),
+        .shift_in(shift_data),
+        .data_out(b)
+    );
+
+
+    // MARK: Shared register read interface
+    // X=0, Y=1, A=2, B=3
+    wire [REGISTER_WIDTH-1:0] reg_value [0:3];
+    assign reg_value[0] = x;
+    assign reg_value[1] = y;
+    assign reg_value[2] = a;
+    assign reg_value[3] = b;
+
+    // Register used by SHR_OUT / SHL_OUT
+    wire [REGISTER_WIDTH-1:0] expanded_shift_source = reg_value[instr[5:4]];
+
+    // Mask register for OUT PINS / OUT DIRS
+    // Uses register selector bits [3:2]
+    wire [REGISTER_WIDTH-1:0] gpio_mask_source = reg_value[instr[3:2]];
+
+    // Source register for SHR_OUT / SHL_OUT to DIR
+    // These instructions encode the register in bits [6:5]
+    wire [REGISTER_WIDTH-1:0] gpio_dir_shift_source =reg_value[instr[6:5]];
+
 
     // MARK: JMP fields
     wire [3:0] jmp_cond;
@@ -154,8 +228,13 @@ module pio_core #(
     wire [7:0] fifo_imm8 = instr[7:0];
 
     wire is_fifo = instr[15] && (op == 3'b000);
-    wire fifo_reg_valid = (fifo_register == 3'd0) ||
-                          (fifo_register == 3'd1);
+    // Only X/Y/A/B are valid FIFO register operands.
+    // Bits 4 and 1:0 are reserved and must be zero.
+    wire fifo_reg_valid =
+        (fifo_register <= 3'd3) &&
+        (instr[4] == 1'b0) &&
+        (instr[1:0] == 2'b00);
+
 
     wire fifo_stall = is_fifo &&
                     (
@@ -176,6 +255,15 @@ module pio_core #(
 
     // byte count is encoded -1.
     wire [2:0] fifo_num_bytes = {1'b0, fifo_byte_cnt} + 3'd1;
+
+    // MARK: FIFO pull byte masking
+    wire [31:0] fifo_pull_mask =
+        (fifo_num_bytes == 3'd1) ? 32'h000000FF :
+        (fifo_num_bytes == 3'd2) ? 32'h0000FFFF :
+        (fifo_num_bytes == 3'd3) ? 32'h00FFFFFF :
+                                   32'hFFFFFFFF;
+    wire [REGISTER_WIDTH-1:0] fifo_pull_data = rx_fifo_data & fifo_pull_mask;
+
 
     // MARK: MOV fields
     wire [1:0] mov_dst = instr[9:8];
@@ -211,22 +299,47 @@ module pio_core #(
     // MARK: DATAPATH
     wire [REGISTER_WIDTH-1:0] x_minus_1 = x - 1;
     wire [REGISTER_WIDTH-1:0] y_minus_1 = y - 1;
+    wire [REGISTER_WIDTH-1:0] a_minus_1 = a - 1'b1;
+    wire [REGISTER_WIDTH-1:0] b_minus_1 = b - 1'b1;
     assign set_reg_res = {{(REGISTER_WIDTH-8){1'b0}}, set_imm};
 
+
+
     // MARK: SRAM programming
-    assign program_write_address = x[8:0];
-    assign program_write_data = y[15:0];
+
+    // SRAM_WRITE ADDRREG, DATAREG
+    // Encoding: 0x9C30 | (addr_reg << 2) | data_reg
+    // Address uses bits [8:0] of ADDRREG
+    // Data uses bits [15:0] of DATAREG
+    wire [1:0] sram_addr_sel = instr[3:2];
+    wire [1:0] sram_data_sel = instr[1:0];
+    wire [REGISTER_WIDTH-1:0] sram_addr_value = reg_value[sram_addr_sel];
+    wire [REGISTER_WIDTH-1:0] sram_data_value = reg_value[sram_data_sel];
+
+    assign program_write_address = sram_addr_value[8:0];
+    assign program_write_data = sram_data_value[15:0];
 
 
     // MARK: Instruction decode & control logic
     always @(*) begin
         // Register defaults
-        x_we      = 0;
-        x_data_in = 0;
-        x_shift   = 0;
-        y_we      = 0;
-        y_data_in = 0;
-        y_shift   = 0;
+        
+        // X register
+        x_we          = 1'b0;
+        x_data_in     = {REGISTER_WIDTH{1'b0}};
+
+        // Y register
+        y_we          = 1'b0;
+        y_data_in     = {REGISTER_WIDTH{1'b0}};
+
+        // A register
+        a_we          = 1'b0;
+        a_data_in     = {REGISTER_WIDTH{1'b0}};
+
+        // B register
+        b_we          = 1'b0;
+        b_data_in     = {REGISTER_WIDTH{1'b0}};
+
         branch_taken = 0;
         switch_to_sramland = 0;
         program_write_enable = 0;
@@ -236,10 +349,23 @@ module pio_core #(
         gpio_pindir    = 0;
         gpio_pin       = 0;
         gpio_value_out = 0;
+
+        // Default mask must be all ones.
+        // gpio.v also uses this mask for MOV R, PINS input snapshots.
+        gpio_multi_mask = 16'hFFFF;
+        gpio_multi_value_out = 16'h0000;
+
         jmp_set_pin    = 0;
         shift_count = 8;
         shift_data = {{(REGISTER_WIDTH-8){1'b0}}, instr[7:0]};
         mov_data = 0;
+
+        // Shared shift defaults
+        shift_en    = 1'b0;
+        shift_right = 1'b0;
+        shift_dst   = 2'b00;
+
+        // Fifo
         tx_fifo_push  = 1'b0;
         tx_fifo_data = {REGISTER_WIDTH{1'b0}};
         tx_fifo_bytes_cnt = (fifo_opmode == 2'b10) ? 3'd1 : fifo_num_bytes;
@@ -308,61 +434,311 @@ module pio_core #(
                         end
                     end
 
+                    4'd9: begin //  A == 0
+                        if (a == 0)
+                            branch_taken = 1'b1;
+                    end
+
+                    4'd10: begin // A != 0
+                        if (a != 0)
+                            branch_taken = 1'b1;
+                    end
+
+                    4'd11: begin // A-- != 0
+                        if (a != 0) begin
+                            branch_taken = 1'b1;
+                            a_we = 1'b1;
+                            a_data_in = a_minus_1;
+                        end
+                    end
+
+                    4'd12: begin // B == 0
+                        if (b == 0)
+                            branch_taken = 1'b1;
+                    end
+
+                    4'd13: begin // B != 0
+                        if (b != 0)
+                            branch_taken = 1'b1;
+                    end
+
+                    4'd14: begin // B-- != 0
+                        if (b != 0) begin
+                            branch_taken = 1'b1;
+                            b_we = 1'b1;
+                            b_data_in = b_minus_1;
+                        end
+                    end
+
                     default: begin
                     end
                 endcase
             end else begin
                 // Non-JMP
                 case (op)
-                    3'b000: begin  // FIFO operations (PUSH/PULL)
+
+                    3'b000: begin // FIFO operations
                         case (fifo_opmode)
-                            2'b00: begin // PUSH
-                                case (fifo_register)
-                                    3'd0: begin // X
-                                        tx_fifo_data = x;
-                                        tx_fifo_push = 1'b1;
-                                    end
-
-                                    3'd1: begin // Y
-                                        tx_fifo_data = y;
-                                        tx_fifo_push = 1'b1;
-                                    end
-
-                                    default: begin
-                                    end
-                                endcase
+                            2'b00: begin // PUSH R, n
+                                if (fifo_reg_valid) begin
+                                    tx_fifo_data = reg_value[fifo_register[1:0]];
+                                    tx_fifo_push = 1'b1;
+                                end
                             end
 
-                            2'b01: begin // PULL
-                                case (fifo_register)
-                                    3'd0: begin // X
-                                        rx_fifo_pull = 1'b1;
-                                        x_we = 1'b1;
-                                        x_data_in = rx_fifo_data;
-                                    end
+                            2'b01: begin // PULL R, n
+                                if (fifo_reg_valid) begin
+                                    rx_fifo_pull = 1'b1;
 
-                                    3'd1: begin // Y
-                                        rx_fifo_pull = 1'b1;
-                                        y_we = 1'b1;
-                                        y_data_in = rx_fifo_data;
-                                    end
+                                    case (fifo_register[1:0])
+                                        2'b00: begin // X
+                                            x_we = 1'b1;
+                                            x_data_in = fifo_pull_data;
+                                        end
 
-                                    default: begin
-                                    end
-                                endcase
+                                        2'b01: begin // Y
+                                            y_we = 1'b1;
+                                            y_data_in = fifo_pull_data;
+                                        end
+
+                                        2'b10: begin // A
+                                            a_we = 1'b1;
+                                            a_data_in = fifo_pull_data;
+                                        end
+
+                                        2'b11: begin // B
+                                            b_we = 1'b1;
+                                            b_data_in = fifo_pull_data;
+                                        end
+                                    endcase
+                                end
                             end
 
-                            2'b10: begin
-                                // push 1-byte immediate
-                                tx_fifo_data = {{(REGISTER_WIDTH-8){1'b0}}, fifo_imm8};
+                            2'b10: begin // PUSH_IMM imm8
+                                tx_fifo_data = {
+                                    {(REGISTER_WIDTH-8){1'b0}},
+                                    fifo_imm8
+                                };
                                 tx_fifo_push = 1'b1;
                             end
 
-                            2'b11: begin
-                                // N/A
+                            // Reserved
+                            default: begin
                             end
                         endcase
                     end
+
+                    3'b001: begin // A / B register operations
+                        if (instr[9]) begin // SET A / SET B
+                            if (instr[8] == 1'b0) begin
+                                a_we = 1'b1;
+                                a_data_in = {
+                                    {(REGISTER_WIDTH-8){1'b0}},
+                                    instr[7:0]
+                                };
+                            end else begin
+                                b_we = 1'b1;
+                                b_data_in = {
+                                    {(REGISTER_WIDTH-8){1'b0}},
+                                    instr[7:0]
+                                };
+                            end
+                        end else begin
+                            case (instr[8:6])
+
+                                3'b000: begin // MOV / parallel GPIO
+                                    case (instr[1:0])
+                                        2'b00: begin // MOV rd, rs
+                                            mov_data = gpio_mask_source;
+
+                                            case (instr[5:4])
+                                                2'b00: begin // X
+                                                    x_we = 1'b1;
+                                                    x_data_in = mov_data;
+                                                end
+
+                                                2'b01: begin // Y
+                                                    y_we = 1'b1;
+                                                    y_data_in = mov_data;
+                                                end
+
+                                                2'b10: begin // A
+                                                    a_we = 1'b1;
+                                                    a_data_in = mov_data;
+                                                end
+
+                                                2'b11: begin // B
+                                                    b_we = 1'b1;
+                                                    b_data_in = mov_data;
+                                                end
+                                            endcase
+                                        end
+
+                                        2'b01: begin // OUT PINS, VALUE_REG, MASK_REG
+                                            gpio_en = 1'b1;
+                                            gpio_op = 3'd3; // SETMULTI
+
+                                            gpio_multi_value_out = expanded_shift_source[15:0];
+                                            gpio_multi_mask = gpio_mask_source[15:0];
+                                        end
+
+                                        2'b10: begin // OUT DIRS, VALUE_REG, MASK_REG
+                                            gpio_en = 1'b1;
+                                            gpio_op = 3'd4; // SETDIRMULTI
+
+                                            gpio_multi_value_out = expanded_shift_source[15:0];
+                                            gpio_multi_mask = gpio_mask_source[15:0];
+                                        end
+
+                                        default: begin
+                                        end
+                                    endcase
+                                end
+
+
+                                // INC / DEC
+                                3'b001: begin
+                                    // Bits 2:0 must be zero.
+                                    // Bit 3 selects INC or DEC.
+                                    if (instr[2:0] == 3'b000) begin // INC or DEC
+                                        case (instr[5:4]) // target register
+                                            2'b00: begin  // X
+                                                x_we = 1'b1;
+                                                x_data_in = instr[3]
+                                                          ? x - 1'b1 : x + 1'b1;
+                                            end
+
+                                            2'b01: begin // Y
+                                                y_we = 1'b1;
+                                                y_data_in = instr[3]
+                                                          ? y - 1'b1 : y + 1'b1;
+                                            end
+
+                                            2'b10: begin // A
+                                                a_we = 1'b1;
+                                                a_data_in = instr[3]
+                                                          ? a - 1'b1 : a + 1'b1;
+                                            end
+
+                                            2'b11: begin // B
+                                                b_we = 1'b1;
+                                                b_data_in = instr[3]
+                                                          ? b - 1'b1 : b + 1'b1;
+                                            end
+                                        endcase
+                                    end
+                                end
+
+
+                                3'b010: begin // SHL_IN R, PIN n
+                                    // R = (R << 1) | sampled_pin
+                                    shift_en = 1'b1;
+                                    shift_dst = instr[5:4];
+
+                                    gpio_pin = instr[3:0];
+
+                                    shift_count = 5'd1;
+                                    shift_data = {
+                                        {(REGISTER_WIDTH-1){1'b0}},
+                                        gpio_value_in
+                                    };
+                                end
+
+                                3'b011: begin // SHR_IN R, PIN n
+                                    // Shift right and insert pin at bit 31
+                                    shift_en = 1'b1;
+                                    shift_right = 1'b1;
+                                    shift_dst = instr[5:4];
+
+                                    gpio_pin = instr[3:0];
+
+                                    shift_count = 5'd1;
+                                    shift_data = {
+                                        {(REGISTER_WIDTH-1){1'b0}},
+                                        gpio_value_in
+                                    };
+                                end
+
+                                3'b100: begin // SHR_OUT R, PIN n
+                                    // Output OLD bit 0, then shift right
+                                    shift_en = 1'b1;
+                                    shift_right = 1'b1;
+                                    shift_dst = instr[5:4];
+
+                                    gpio_en = 1'b1;
+                                    gpio_op = 3'd2; // SET PIN
+                                    gpio_pin = instr[3:0];
+                                    gpio_value_out = expanded_shift_source[0];
+
+                                    shift_count = 5'd1;
+                                    shift_data = {REGISTER_WIDTH{1'b0}};
+                                end
+
+                                3'b101: begin // SHL_OUT R, PIN n
+                                    // Output OLD bit 31, then shift left
+                                    shift_en = 1'b1;
+                                    shift_dst = instr[5:4];
+
+                                    gpio_en = 1'b1;
+                                    gpio_op = 3'd2; // SET PIN
+                                    gpio_pin = instr[3:0];
+                                    gpio_value_out = expanded_shift_source[REGISTER_WIDTH-1];
+
+                                    shift_count = 5'd1;
+                                    shift_data = {REGISTER_WIDTH{1'b0}};
+                                end
+
+                                3'b110: begin // SHL R, n
+                                    // n = 1..16; logical zero-fill
+                                    shift_en = 1'b1;
+                                    shift_dst = instr[5:4];
+
+                                    shift_count = {1'b0, instr[3:0]} + 5'd1;
+                                    shift_data = {REGISTER_WIDTH{1'b0}};
+                                end
+
+                                3'b111: begin // SHR R, n
+                                    // n = 1..16; logical zero-fill
+                                    shift_en = 1'b1;
+                                    shift_right = 1'b1;
+                                    shift_dst = instr[5:4];
+
+                                    shift_count =
+                                        {1'b0, instr[3:0]} + 5'd1;
+
+                                    shift_data = {REGISTER_WIDTH{1'b0}};
+                                end
+
+                            endcase
+                        end
+                    end
+
+
+                    3'b010: begin // SHL_IN R, imm8
+                        // Shift left by 8 and insert imm8 at bits 7:0
+                        shift_en = 1'b1;
+                        shift_dst = instr[9:8];
+
+                        shift_count = 5'd8;
+                        shift_data = {
+                            {(REGISTER_WIDTH-8){1'b0}},
+                            instr[7:0]
+                        };
+                    end
+
+                    3'b011: begin // SHR_IN R, imm8
+                        // Shift right by 8 and insert imm8 at bits 31:24
+                        shift_en = 1'b1;
+                        shift_right = 1'b1;
+                        shift_dst = instr[9:8];
+
+                        shift_count = 5'd8;
+                        shift_data = {
+                            {(REGISTER_WIDTH-8){1'b0}},
+                            instr[7:0]
+                        };
+                    end
+
                     3'b100: begin // SET
                         case (set_dst)
                             2'b00: begin // X
@@ -399,41 +775,56 @@ module pio_core #(
                         endcase
                     end
 
-                    3'b101: begin // MOV
-                        case (mov_src)
-                            2'b00: begin // X
-                                mov_data = x;
-                            end
+                    3'b101: begin // MOV from GPIO only
+                        // Register-to-register MOV uses opcode 001.
+                        // Only PIN and PINS are valid sources here.
 
-                            2'b01: begin // Y
-                                mov_data = y;
-                            end
+                        if (mov_src == 2'b10 ||
+                            mov_src == 2'b11) begin
 
-                            2'b10: begin // PIN n
-                                gpio_pin = instr[3:0];
-                                mov_data = {{(REGISTER_WIDTH-1){1'b0}}, gpio_value_in};
-                            end
+                            case (mov_src)
+                                2'b10: begin // PIN n
+                                    gpio_pin = instr[3:0];
+                                    mov_data = {
+                                        {(REGISTER_WIDTH-1){1'b0}},
+                                        gpio_value_in
+                                    };
+                                end
 
-                            2'b11: begin // PINS (all)
-                                mov_data = {{(REGISTER_WIDTH-16){1'b0}}, gpio_pins_in};
-                            end
-                        endcase
+                                2'b11: begin // PINS
+                                    mov_data = {
+                                        {(REGISTER_WIDTH-16){1'b0}},
+                                        gpio_pins_in
+                                    };
+                                end
 
-                        case (mov_dst)
-                            2'b00: begin
-                                x_data_in = mov_data;
-                                x_we = 1'b1;
-                            end
+                                default: begin
+                                end
+                            endcase
 
-                            2'b01: begin
-                                y_data_in = mov_data;
-                                y_we = 1'b1;
-                            end
+                            // Destination: X, Y, A or B
+                            case (mov_dst)
+                                2'b00: begin // X
+                                    x_we = 1'b1;
+                                    x_data_in = mov_data;
+                                end
 
-                            default: begin
-                                // nothing for now
-                            end
-                        endcase
+                                2'b01: begin // Y
+                                    y_we = 1'b1;
+                                    y_data_in = mov_data;
+                                end
+
+                                2'b10: begin // A
+                                    a_we = 1'b1;
+                                    a_data_in = mov_data;
+                                end
+
+                                2'b11: begin // A
+                                    b_we = 1'b1;
+                                    b_data_in = mov_data;
+                                end
+                            endcase
+                        end
                     end
 
                     3'b110: begin // NOP
@@ -445,26 +836,13 @@ module pio_core #(
                         case (instr[9:8])
                             2'b00: begin // Control operations
                                 casez (instr[7:0])
-                                    8'd0: begin // Exit BootROM
+                                    8'h00: begin // ENTER_SRAM
                                         switch_to_sramland = 1'b1;
                                     end
 
-                                    8'd1: begin // SRAM_WRITE
+                                    // SRAM_WRITE ADDRREG, DATAREG
+                                    8'b0011_????: begin
                                         program_write_enable = 1'b1;
-                                    end
-
-                                    8'b0001_????: begin // SHIFT_IN X, PIN
-                                        gpio_pin = instr[3:0];
-                                        shift_count = 1;
-                                        shift_data = {{(REGISTER_WIDTH-1){1'b0}}, gpio_value_in};
-                                        x_shift = 1'b1;
-                                    end
-
-                                    8'b0010_????: begin // SHIFT_IN Y, PIN
-                                        gpio_pin = instr[3:0];
-                                        shift_count = 1;
-                                        shift_data = {{(REGISTER_WIDTH-1){1'b0}}, gpio_value_in};
-                                        y_shift = 1'b1;
                                     end
 
                                     default: begin
@@ -472,17 +850,41 @@ module pio_core #(
                                 endcase
                             end
 
-                            2'b01: begin // SHIFT_IN X
-                                x_shift = 1'b1;
+
+                            2'b11: begin // SIDEPIN / direction shifts
+                                // 0x9F80 - 0x9FFF
+                                // SHR_OUT / SHL_OUT R, DIR n [, INV]
+                                if (instr[7]) begin
+                                    // Write GPIO output enable
+                                    gpio_en = 1'b1;
+                                    gpio_op = 3'd1; // SETDIR
+
+                                    // Direction pins are only 0..7
+                                    gpio_pin = {1'b0, instr[2:0]};
+
+                                    // Bit 4: 0 = SHR, 1 = SHL
+                                    // Bit 3: invert the outgoing bit
+                                    gpio_pindir = (
+                                        instr[4]
+                                            ? gpio_dir_shift_source[REGISTER_WIDTH-1]
+                                            : gpio_dir_shift_source[0]
+                                    ) ^ instr[3];
+
+                                    // Shift the selected source register
+                                    // at the same clock edge
+                                    shift_en = 1'b1;
+                                    shift_dst = instr[6:5];
+                                    shift_right = ~instr[4];
+
+                                    shift_count = 5'd1;
+                                    shift_data = {REGISTER_WIDTH{1'b0}};
+
+                                end else if (instr[7:4] == 4'b0000) begin
+                                    // 0x9F00 - 0x9F0F: SET SIDEPIN
+                                    side_pin_we = 1'b1;
+                                end
                             end
 
-                            2'b10: begin // SHIFT_IN Y
-                                y_shift = 1'b1;
-                            end
-
-                            2'b11: begin // SET SIDESET pin_no
-                                side_pin_we = 1'b1;
-                            end
 
                             default: begin
                             end

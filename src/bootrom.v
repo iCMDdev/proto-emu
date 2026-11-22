@@ -39,11 +39,11 @@ module bootrom (
         input [8:0] addr;
         begin
             case (addr)
-                9'h000: boot_rom  = 16'h9000; // SET X, 0
-                9'h001: boot_rom  = 16'h9190; // SET Y, 0x90
-                9'h002: boot_rom  = 16'h9E05; // SHIFT_IN Y, 0x05
-                9'h003: boot_rom  = 16'h9C01; // SRAM_WRITE
-                9'h004: boot_rom  = 16'h9C00; // ENTER SRAMLAND
+                9'h000:  boot_rom = 16'h9000; // SET X, 0
+                9'h001:  boot_rom = 16'h9190; // SET Y, 0x90
+                9'h002:  boot_rom = 16'h8905; // SHL_IN Y, 0x05
+                9'h003:  boot_rom = 16'h9C31; // SRAM_WRITE X, Y
+                9'h004:  boot_rom = 16'h9C00; // ENTER SRAMLAND
                 default: boot_rom = 16'h0000; // JMP 0
             endcase
         end

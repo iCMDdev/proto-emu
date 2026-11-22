@@ -160,8 +160,8 @@ module tt_um_example (
   wire        gpio_dir;
   wire        gpio_value_in;
   wire        gpio_value_out;
-  wire [15:0] gpio_multi_mask = 16'hffff;
-  wire [15:0] gpio_multi_value_out = 16'h0000;
+  wire [15:0] gpio_multi_mask;
+  wire [15:0] gpio_multi_value_out;
   wire [15:0] gpio_multi_value_in;
   wire        gpio_side_set_en;
   wire        gpio_side_set_value;
@@ -173,7 +173,7 @@ module tt_um_example (
     .rst(rst),
     .enable(gpio_en | gpio_side_set_en),
 
-    .ui_in({ui_in[7:3], 3'b000}),
+    .ui_in(ui_in),
     .uo_out(gpio_uo_out),
     .uio_in(uio_in),
     .uio_out(uio_out),
@@ -290,6 +290,8 @@ module tt_um_example (
       .gpio_pindir(gpio_dir),
       .gpio_pin(gpio_pin),
       .gpio_value_out(gpio_value_out),
+      .gpio_multi_mask(gpio_multi_mask),
+      .gpio_multi_value_out(gpio_multi_value_out),
       .gpio_value_in(gpio_value_in),
       .gpio_pins_in(gpio_multi_value_in),
 
