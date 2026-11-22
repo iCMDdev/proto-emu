@@ -32,6 +32,7 @@ module pio_core #(
     output reg          gpio_value_out,
     output reg  [15:0]  gpio_multi_mask,
     output reg  [15:0]  gpio_multi_value_out,
+    output reg  [15:0]  gpio_sync_bypass,
     input  wire         gpio_value_in,
     input  wire [15:0]  gpio_pins_in,
 
@@ -182,7 +183,53 @@ module pio_core #(
 
     // Source register for SHR_OUT / SHL_OUT to DIR
     // These instructions encode the register in bits [6:5]
-    wire [REGISTER_WIDTH-1:0] gpio_dir_shift_source =reg_value[instr[6:5]];
+    wire [REGISTER_WIDTH-1:0] gpio_dir_shift_source = reg_value[instr[6:5]];
+
+
+    // MARK: Clocked event interface
+    reg  edge_clock_we;
+    reg  sync_mask_we;
+    wire event_stall;
+
+    // Debug-visible mirrors for existing testbenches (no additional flops)
+    wire [3:0] edge_clock_pin;
+    wire       event_armed;
+
+    // The WAIT/edge-shift state machine and EDGECLK register module
+    clocked_event_engine #(
+        .USE_NEGEDGE(USE_NEGEDGE)
+    ) event_engine (
+        .clk(clk),
+        .rst(rst),
+        .instr(instr),
+        .sampled_pins(gpio_pins_in),
+        .edge_clock_we(edge_clock_we),
+        .other_stall((delay_out != 0) || fifo_stall),
+        .event_stall(event_stall),
+        .edge_clock_pin(edge_clock_pin),
+        .event_armed(event_armed)
+    );
+
+    // The synchronizer selector configures GPIO input sampling, not edge
+    // detection, so its register remains owned by the PIO core.
+    wire [REGISTER_WIDTH-1:0] sync_mask_value = reg_value[instr[1:0]];
+    generate
+        if (USE_NEGEDGE) begin : gpio_sync_negedge
+            always @(negedge clk) begin
+                if (rst)
+                    gpio_sync_bypass <= 16'h0000;
+                else if (sync_mask_we)
+                    gpio_sync_bypass <= sync_mask_value[15:0];
+            end
+        end else begin : gpio_sync_posedge
+            always @(posedge clk) begin
+                if (rst)
+                    gpio_sync_bypass <= 16'h0000;
+                else if (sync_mask_we)
+                    gpio_sync_bypass <= sync_mask_value[15:0];
+            end
+        end
+    endgenerate
 
 
     // MARK: JMP fields
@@ -282,7 +329,7 @@ module pio_core #(
     // if this is a delay instruction, load the counter,
     // but only if it isn't already loaded
     assign delay_load = is_delay && (delay_out == 0);
-    assign hold_pipeline = (delay_out != 0) || fifo_stall;
+    assign hold_pipeline = (delay_out != 0) || fifo_stall || event_stall;
 
     delay_counter #(
         .USE_NEGEDGE(USE_NEGEDGE)
@@ -356,6 +403,8 @@ module pio_core #(
         gpio_multi_value_out = 16'h0000;
 
         jmp_set_pin    = 0;
+        edge_clock_we = 1'b0;
+        sync_mask_we  = 1'b0;
         shift_count = 8;
         shift_data = {{(REGISTER_WIDTH-8){1'b0}}, instr[7:0]};
         mov_data = 0;
@@ -845,13 +894,41 @@ module pio_core #(
                                         program_write_enable = 1'b1;
                                     end
 
+                                    // SET EDGECLK, pin
+                                    8'b0100_????: begin
+                                        edge_clock_we = 1'b1;
+                                    end
+
+                                    // SYNC_BYPASS X/Y/A/B
+                                    8'b0101_00??: begin
+                                        sync_mask_we = 1'b1;
+                                    end
+
                                     default: begin
                                     end
                                 endcase
                             end
 
+                            2'b01: begin // WAIT
+                                // WAIT fot pin level or fresh edge.
+                                // event_stall is outside this decoder, so the
+                                // instruction advances only on satisfaction
+                             end
 
-                            2'b11: begin // SIDEPIN / direction shifts
+                             // 0x9E00..0x9EFF: edge capture + shift on same
+                             // accepting clock edge
+                             2'b10: begin // SHIFT_IN_EDGE / SHR_IN_EDGE
+                                 shift_en = 1'b1;
+                                 shift_right = instr[7];
+                                 shift_dst = instr[5:4];
+                                 shift_count = 5'd1;
+                                 shift_data = {
+                                     {(REGISTER_WIDTH-1){1'b0}},
+                                     gpio_pins_in[instr[3:0]]
+                                 };
+                             end
+
+                             2'b11: begin // SIDEPIN / direction shifts
                                 // 0x9F80 - 0x9FFF
                                 // SHR_OUT / SHL_OUT R, DIR n [, INV]
                                 if (instr[7]) begin

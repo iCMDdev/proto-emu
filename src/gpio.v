@@ -40,6 +40,11 @@ module gpio (
     input  wire       pin_value_out, // value (when set)
     output wire       pin_value_in,  // value (when read)
 
+    // Configurable input sampling
+    // 0 = two-FF path, 1 = first-FF patch
+    input  wire [15:0] sync_bypass,
+    output wire [15:0] sampled_pins,
+
     // Multiple-pin operations
     input  wire [15:0] multi_mask,
     input  wire [15:0] multi_value_out,
@@ -67,7 +72,9 @@ module gpio (
     end
 
     // Pin number mapping for in / out / IO
-    wire [15:0] gpio_in = gpio_sync_ff_2;
+    wire [15:0] gpio_in = (gpio_sync_ff_2 & ~sync_bypass) |
+                          (gpio_sync_ff_1 &  sync_bypass);
+    assign sampled_pins = gpio_in;
     reg [15:0] gpio_out;
     reg [7:0]  gpio_dir;
 

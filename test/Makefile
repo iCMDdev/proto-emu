@@ -18,7 +18,8 @@ PROJECT_SOURCES = \
 	shift_register.v \
 	gpio.v \
 	ringbuffer_fifo.v \
-	spi_host.v
+	spi_host.v \
+	clocked_event_engine.v
 
 ifneq ($(GATES),yes)
 

@@ -29,6 +29,7 @@ project:
     - "gpio.v"
     - "ringbuffer_fifo.v"
     - "spi_host.v"
+    - "clocked_event_engine.v"
     # - "proto_logo.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
